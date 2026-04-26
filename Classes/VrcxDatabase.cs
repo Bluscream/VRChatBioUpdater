@@ -11,6 +11,7 @@ namespace VRChatBioUpdater
 
         public VrcxDatabase(string dbPath)
         {
+            SQLitePCL.Batteries.Init();
             _dbPath = Environment.ExpandEnvironmentVariables(dbPath);
             // Fallback: if %APPDATA% didn't expand (e.g. single-file publish), resolve manually
             if (_dbPath.Contains("%APPDATA%", StringComparison.OrdinalIgnoreCase))
