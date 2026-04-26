@@ -258,7 +258,17 @@ internal class Program
             }
         }
 
-        // 2. Collect from VRCX (merge or fallback)
+        // 2. Fetch Group Metadata for DisplayNames
+        Console.WriteLine("Fetching favorite group metadata...");
+        var favoriteGroups = await client.Favorites.GetFavoriteGroupsAsync();
+        var tagToDisplayName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (favoriteGroups != null) {
+            foreach (var fg in favoriteGroups) {
+                tagToDisplayName[fg.Name] = fg.DisplayName;
+            }
+        }
+
+        // 3. Collect from VRCX (merge or fallback)
         var vrcxGroups = vrcxDb.GetAllFavoriteGroups();
         foreach (var vGroup in vrcxGroups)
         {
@@ -272,7 +282,8 @@ internal class Program
             }
         }
 
-        // 3. Process all groups into display names
+        // 4. Process all groups into display name lists
+        var groupNames = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         var groupVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var groupEvalVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         
@@ -281,6 +292,12 @@ internal class Program
             var names = await GetDisplayNameList(group.Value);
             var namesStr = string.Join(", ", names);
             
+            // Store raw list for the advanced resolver
+            groupNames[group.Key] = names;
+            if (tagToDisplayName.TryGetValue(group.Key, out var dName)) {
+                groupNames[dName] = names;
+            }
+
             // Primary variables (e.g. {group_0} or {friend:group_1})
             groupVars[$"{{{group.Key}}}"] = namesStr;
             groupVars[$"{{{group.Key}:names}}"] = namesStr;
@@ -299,6 +316,13 @@ internal class Program
                     groupVars[$"{{{alias}}}"] = namesStr;
                     groupEvalVars[$"{alias}.Count"] = names.Count.ToString();
                 }
+            }
+            
+            // Add DisplayName aliases if available
+            if (tagToDisplayName.TryGetValue(group.Key, out var displayName)) {
+                groupVars[$"{{{displayName}}}"] = namesStr;
+                groupVars[$"{{{displayName}:names}}"] = namesStr;
+                groupEvalVars[$"{displayName}.Count"] = names.Count.ToString();
             }
         }
         Console.WriteLine($"Dynamic Variables: Generated {groupVars.Count} group placeholders.");
@@ -406,22 +430,9 @@ internal class Program
         }
 
         Console.WriteLine("\nGenerating new bio content...");
-        var newBioPart = template;
-        
-        // Multi-pass replacement to support nested custom variables
-        string lastBio;
-        int passes = 0;
-        do
-        {
-            lastBio = newBioPart;
-            foreach (var v in vars)
-            {
-                newBioPart = newBioPart.Replace(v.Key, v.Value);
-            }
-            passes++;
-        } while (newBioPart != lastBio && passes < 3);
+        var finalBioContent = ResolveTemplate(template, vars, groupNames);
+        var finalBio = (string.IsNullOrWhiteSpace(oldBio) ? "" : oldBio + separator) + finalBioContent;
 
-        var finalBio = (string.IsNullOrWhiteSpace(oldBio) ? "" : oldBio + separator) + newBioPart;
         if (finalBio.Length > 512) {
             Console.WriteLine($"\nWarning: Final bio length ({finalBio.Length}) exceeds 512 characters. Truncating...");
             finalBio = finalBio.Substring(0, 509) + "...";
@@ -431,6 +442,47 @@ internal class Program
         Console.WriteLine("Updating bio on VRChat servers...");
         await client.Users.UpdateUserAsync(currentUser.Id, new UpdateUserRequest(bio: finalBio));
         Console.WriteLine("Bio update complete.");
+    }
+
+    private static string ResolveTemplate(string template, Dictionary<string, string> vars, Dictionary<string, List<string>> groupNames)
+    {
+        var result = template;
+        var regex = new System.Text.RegularExpressions.Regex(@"\{(?<key>[^,}]+)(?:,(?<sep>[^}]+))?\}");
+        
+        string lastResult;
+        int passes = 0;
+        do {
+            lastResult = result;
+            result = regex.Replace(result, m => {
+                var key = m.Groups["key"].Value.Trim();
+                var sep = m.Groups["sep"].Success ? m.Groups["sep"].Value : null;
+                
+                // Normalize key for groups
+                var groupKey = key;
+                if (groupKey.StartsWith("favorites.", StringComparison.OrdinalIgnoreCase)) groupKey = groupKey.Substring(10);
+                if (groupKey.EndsWith(".names", StringComparison.OrdinalIgnoreCase)) groupKey = groupKey.Substring(0, groupKey.Length - 6);
+
+                if (groupNames.TryGetValue(groupKey, out var list)) {
+                    var separator = sep != null ? sep.Replace("\\n", "\n") : ", ";
+                    return string.Join(separator, list);
+                }
+
+                // If it's a count property
+                if (key.EndsWith(".Count", StringComparison.OrdinalIgnoreCase)) {
+                    var stem = key.Substring(0, key.Length - 6);
+                    if (stem.StartsWith("favorites.", StringComparison.OrdinalIgnoreCase)) stem = stem.Substring(10);
+                    if (groupNames.TryGetValue(stem, out var list2)) return list2.Count.ToString();
+                }
+
+                // Fallback to simple variables
+                if (vars.TryGetValue($"{{{key}}}", out var val)) return val;
+                
+                return m.Value; // Keep as is if not found
+            });
+            passes++;
+        } while (result != lastResult && passes < 3);
+        
+        return result;
     }
 
     private static async Task<List<string>> GetDisplayNameList(List<string> userIds)
