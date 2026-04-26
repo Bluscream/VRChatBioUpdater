@@ -142,5 +142,32 @@ namespace VRChatBioUpdater
             }
             return results;
         }
+
+        public List<string> GetAllFavoriteGroups()
+        {
+            var groups = new List<string>();
+            try
+            {
+                using (var conn = GetConnection())
+                {
+                    if (conn == null) return groups;
+                    using (var cmd = new SqliteCommand("SELECT DISTINCT group_name FROM favorite_friend", conn))
+                    {
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                groups.Add(reader.GetString(0));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[VRCX DB] Error in GetAllFavoriteGroups: {ex.Message}");
+            }
+            return groups;
+        }
     }
 }

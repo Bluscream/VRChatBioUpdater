@@ -237,24 +237,71 @@ internal class Program
         Console.WriteLine("Fetching favorites for group placeholders...");
         var favorites = await client.Favorites.GetFavoritesAsync(type: "friend");
         
-        // Helper to get group members with fallback to VRCX DB
-        List<string> GetGroupMembers(string groupName, string vrcxGroupName)
+        // Dynamic group variables as suggested by user
+        var allGroupIds = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+        // 1. Collect from VRChat API favorites
+        if (favorites != null)
         {
-            var apiGroup = favorites?.Where(f => f.Tags != null && f.Tags.Contains(groupName)).Select(f => f.FavoriteId).ToList();
-            if (apiGroup != null && apiGroup.Count > 0) return apiGroup;
-            
-            // Fallback to VRCX local DB
-            return vrcxDb.GetFavoriteFriends(vrcxGroupName);
+            foreach (var favorite in favorites)
+            {
+                if (favorite.Tags == null) continue;
+                foreach (var tag in favorite.Tags)
+                {
+                    if (!allGroupIds.TryGetValue(tag, out var list))
+                    {
+                        list = new List<string>();
+                        allGroupIds[tag] = list;
+                    }
+                    if (!list.Contains(favorite.FavoriteId)) list.Add(favorite.FavoriteId);
+                }
+            }
         }
 
-        var group0 = GetGroupMembers("group_0", "friend:group_1");
-        var group1 = GetGroupMembers("group_1", "friend:group_2");
-        var group2 = GetGroupMembers("group_2", "friend:group_3");
+        // 2. Collect from VRCX (merge or fallback)
+        var vrcxGroups = vrcxDb.GetAllFavoriteGroups();
+        foreach (var vGroup in vrcxGroups)
+        {
+            var vrcxMembers = vrcxDb.GetFavoriteFriends(vGroup);
+            if (vrcxMembers.Count > 0)
+            {
+                if (!allGroupIds.TryGetValue(vGroup, out var list) || list.Count == 0)
+                {
+                    allGroupIds[vGroup] = vrcxMembers;
+                }
+            }
+        }
 
-        var group0Names = await GetDisplayNameList(group0);
-        var group1Names = await GetDisplayNameList(group1);
-        var group2Names = await GetDisplayNameList(group2);
-        Console.WriteLine($"Group sizes: G0={group0Names.Count}, G1={group1Names.Count}, G2={group2Names.Count}");
+        // 3. Process all groups into display names
+        var groupVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var groupEvalVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        
+        foreach (var group in allGroupIds)
+        {
+            var names = await GetDisplayNameList(group.Value);
+            var namesStr = string.Join(", ", names);
+            
+            // Primary variables (e.g. {group_0} or {friend:group_1})
+            groupVars[$"{{{group.Key}}}"] = namesStr;
+            groupVars[$"{{{group.Key}:names}}"] = namesStr;
+            groupEvalVars[$"{group.Key}.Count"] = names.Count.ToString();
+            
+            // Convenient aliases for standard groups
+            if (group.Key.StartsWith("group_", StringComparison.OrdinalIgnoreCase)) {
+                var alias = group.Key.Replace("_", ""); // group_0 -> group0
+                groupVars[$"{{{alias}}}"] = namesStr;
+                groupEvalVars[$"{alias}.Count"] = names.Count.ToString();
+            }
+            else if (group.Key.StartsWith("friend:group_", StringComparison.OrdinalIgnoreCase)) {
+                var indexStr = group.Key.Substring("friend:group_".Length);
+                if (int.TryParse(indexStr, out int idx)) {
+                    var alias = $"group{idx-1}"; // friend:group_1 -> group0
+                    groupVars[$"{{{alias}}}"] = namesStr;
+                    groupEvalVars[$"{alias}.Count"] = names.Count.ToString();
+                }
+            }
+        }
+        Console.WriteLine($"Dynamic Variables: Generated {groupVars.Count} group placeholders.");
 
         if (!string.IsNullOrWhiteSpace(cfg.App.SteamId)) {
             Console.WriteLine($"Fetching Steam playtime for {cfg.App.SteamId}...");
@@ -293,7 +340,7 @@ internal class Program
             taggedUsersCount += targetIds.Count(id => tagManager.IsUserTagged(id));
         }
 
-        var vars = new Dictionary<string, string>
+        var vars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             { "{last_activity}", ((long)(DateTime.UtcNow - currentUser.LastActivity).TotalMilliseconds).ToText() },
             { "{playtime}", playtimeText },
@@ -303,9 +350,6 @@ internal class Program
             { "{friends}", currentUser.Friends?.Count.ToString() ?? "0" },
             { "{blocked}", blocks.ToString() },
             { "{muted}", mutes.ToString() },
-            { "{group0}", string.Join(", ", group0Names) },
-            { "{group1}", string.Join(", ", group1Names) },
-            { "{group2}", string.Join(", ", group2Names) },
 
             { "{tags_loaded}", tagManager.TagsLoadedCount.ToString() },
             { "{tagged_users}", taggedUsersCount.ToString() },
@@ -320,13 +364,16 @@ internal class Program
             { "{interval}", ((long)cfg.App.UpdateInterval).ToText() }
         };
 
-        var evalVars = new Dictionary<string, string>
+        // Merge dynamic group variables
+        foreach (var gv in groupVars) vars[gv.Key] = gv.Value;
+
+        var evalVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            { "group0.Count", group0Names.Count.ToString() },
-            { "group1.Count", group1Names.Count.ToString() },
-            { "group2.Count", group2Names.Count.ToString() },
             { "friends.Count", (currentUser.Friends?.Count ?? 0).ToString() }
         };
+
+        // Merge dynamic group eval variables
+        foreach (var gev in groupEvalVars) evalVars[gev.Key] = gev.Value;
 
         var dt = new System.Data.DataTable();
         if (cfg.App.CustomVariables != null)
