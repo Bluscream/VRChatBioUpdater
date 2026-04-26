@@ -14,6 +14,7 @@ using Humanizer;
 
 namespace VRChatBioUpdater
 {
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     class Program
     {
         private static VRChatApiClient client;
@@ -26,16 +27,17 @@ namespace VRChatBioUpdater
             config = new Configuration(new FileInfo(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "VRChatBioUpdater.json")));
             var appConfig = config.LoadConfiguration();
 
-            client = new VRChatApiClient(appConfig.Username, appConfig.Password, appConfig.TOTPSecret, appConfig._AuthCookie, appConfig._TwoFactorAuthCookie);
+            client = new VRChatApiClient(appConfig.Username, appConfig.Password, appConfig.TOTPSecret, appConfig.AuthCookie, appConfig.TwoFactorAuthCookie);
             tagManager = new TagManager(appConfig.TagUrls);
-
-            // Capture cookies for next time
-            appConfig._AuthCookie = client.AuthCookie;
-            appConfig._TwoFactorAuthCookie = client.TwoFactorAuthCookie;
-            config.SaveConfiguration();
 
             Console.WriteLine($"Initial delay: {appConfig.InitialDelay}ms");
             await Task.Delay(appConfig.InitialDelay);
+
+            // Capture cookies for next time
+            Console.WriteLine($"[Debug] Cookies after delay: Auth={!string.IsNullOrEmpty(client.AuthCookie)}, 2FA={!string.IsNullOrEmpty(client.TwoFactorAuthCookie)}");
+            config.App.AuthCookie = client.AuthCookie;
+            config.App.TwoFactorAuthCookie = client.TwoFactorAuthCookie;
+            config.SaveConfiguration();
 
             do
             {

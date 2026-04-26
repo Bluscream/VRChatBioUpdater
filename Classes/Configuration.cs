@@ -6,11 +6,12 @@ using System.Linq;
 
 namespace VRChatBioUpdater
 {
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     internal class Configuration
     {
         private FileInfo file;
         private string LoadedJson;
-        internal AppConfig App = new AppConfig();
+        public AppConfig App = new AppConfig();
         public class TemplateLine
         {
             public string Content { get; set; }
@@ -25,8 +26,10 @@ namespace VRChatBioUpdater
             public string Password { get; set; } = "";
             public string TOTPSecret { get; set; } = "";
             public string UserAgent { get; set; } = "VRChatBioUpdater/1.0";
-            public string _AuthCookie { get; set; } = "";
-            public string _TwoFactorAuthCookie { get; set; } = "";
+            [JsonProperty("AuthCookie")]
+            public string AuthCookie { get; set; } = "";
+            [JsonProperty("TwoFactorAuthCookie")]
+            public string TwoFactorAuthCookie { get; set; } = "";
             
             [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
             public List<string> TagUrls { get; set; } = new List<string> { "https://github.com/Bluscream/FewTags/raw/refs/heads/main/usertags.json" };

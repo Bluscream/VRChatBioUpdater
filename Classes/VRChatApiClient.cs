@@ -41,10 +41,8 @@ namespace VRChatBioUpdater
             Playermoderations = new PlayermoderationApi(ApiConfiguration);
             Auth = new AuthenticationApi(ApiConfiguration);
 
-            if (string.IsNullOrEmpty(authCookie))
-            {
-                LoginAsync(totpSecret).GetAwaiter().GetResult();
-            }
+            Console.WriteLine($"[Debug] Client Constructor: AuthCookie Provided={!string.IsNullOrEmpty(authCookie)}, 2FAProvided={!string.IsNullOrEmpty(twoFactorAuthCookie)}");
+            LoginAsync(totpSecret).GetAwaiter().GetResult();
         }
 
         private async Task LoginAsync(string totpSecret)
@@ -58,15 +56,39 @@ namespace VRChatBioUpdater
             {
                 if (e.ErrorContent.ToString().Contains("2fa") || e.ErrorCode == 401)
                 {
+                    // Clear invalid cookies
+                    ApiConfiguration.AddApiKey("auth", null);
+                    ApiConfiguration.AddApiKey("twoFactorAuth", null);
+
                     if (!string.IsNullOrEmpty(totpSecret))
                     {
+                        Console.WriteLine($"[VRChat API] Session expired or invalid. Attempting fresh login with TOTP... (Secret length: {totpSecret?.Length ?? 0})");
+                        // Performing a call to GetCurrentUser without cookies will trigger the initial auth challenge
+                        try { await Auth.GetCurrentUserAsync(); } catch { } 
+
                         var totp = new Totp(Base32Encoding.ToBytes(totpSecret));
                         var code = totp.ComputeTotp();
                         try 
                         {
                             await Auth.Verify2FAAsync(new TwoFactorAuthCode(code));
-                            // After verification, we might need to fetch the user again to ensure cookies are set
-                            await Auth.GetCurrentUserAsync();
+                            
+                            // Try to extract cookies from the header if the SDK didn't automatically add them to config
+                            var currentUserResponse = await Auth.GetCurrentUserWithHttpInfoAsync();
+                            var currentUser = currentUserResponse.Data;
+
+                            if (currentUserResponse.Headers.TryGetValue("Set-Cookie", out var setCookie)) {
+                                foreach (var cookie in setCookie) {
+                                    if (cookie.StartsWith("auth=")) {
+                                        var val = cookie.Split(';')[0].Split('=')[1];
+                                        ApiConfiguration.AddApiKey("auth", val);
+                                    } else if (cookie.StartsWith("twoFactorAuth=")) {
+                                        var val = cookie.Split(';')[0].Split('=')[1];
+                                        ApiConfiguration.AddApiKey("twoFactorAuth", val);
+                                    }
+                                }
+                            }
+
+                            Console.WriteLine($"Logged in as {currentUser.DisplayName}");
                         }
                         catch (Exception ex)
                         {
@@ -75,7 +97,7 @@ namespace VRChatBioUpdater
                     }
                     else
                     {
-                        Console.WriteLine("[VRChat API] 2FA required but no TOTP secret provided.");
+                        Console.WriteLine("[VRChat API] 2FA required but no TOTP secret provided and cookies are invalid.");
                     }
                 }
                 else
