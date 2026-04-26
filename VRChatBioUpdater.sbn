@@ -1,0 +1,30 @@
+{{- func is_valid(val)
+    ret val && val != "" && val != "null" && val != "0s"
+end -}}
+{{- if groups.friend_group_0_names.size > 0 }}Relationship: {{ groups.friend_group_0_names | array.join ", " }}, M., G., T. <3{{ end }}
+{{- if groups.friend_group_1_names.size > 0 }}Auto Accept: {{ groups.friend_group_1_names | array.join ", " }}{{ end }}
+{{- if groups.friend_group_2_names.size > 0 }}Auto Invite: {{ groups.friend_group_2_names | array.join ", " }}{{ end }}
+
+{{- if is_valid(user.rank) }}Real Rank: {{ user.rank }}{{ end }}
+{{- 
+    list = []
+    if stats.friends > 0; list = list | array.add ("Friends: " + stats.friends); end
+    if stats.blocked > 0; list = list | array.add ("Blocked: " + stats.blocked); end
+    if stats.muted > 0; list = list | array.add ("Muted: " + stats.muted); end
+    list | array.join " | " 
+}}
+{{- if is_valid(playtime.steam) }}Time played: {{ playtime.steam }}{{ if is_valid(playtime.vrcx) }} ({{ playtime.vrcx }}){{ end }}{{ end }}
+{{- if is_valid(user.date_joined) }}Date joined: {{ user.date_joined }}{{ end }}
+Last updated: {{ now }} (every {{ interval }})
+Tagged: {{ stats.tagged }}/{{ stats.total_tags }}
+
+{{- if is_valid(user.id) }}
+User ID: {{ user.id }}{{ end -}}
+{{- if is_valid(user.steam_id) }}
+Steam ID: {{ user.steam_id }}{{ end -}}
+{{- if is_valid(user.oculus_id) }}
+Oculus ID: {{ user.oculus_id }}{{ end -}}
+{{- if is_valid(user.pico_id) }}
+Pico ID: {{ user.pico_id }}{{ end -}}
+{{- if is_valid(user.vive_id) }}
+Vive ID: {{ user.vive_id }}{{ end -}}

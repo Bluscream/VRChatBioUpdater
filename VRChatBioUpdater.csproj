@@ -7,19 +7,20 @@
     <Nullable>disable</Nullable>
     <AssemblyName>VRChatBioUpdater</AssemblyName>
     <RootNamespace>VRChatBioUpdater</RootNamespace>
-    <StartupObject>Program</StartupObject>
+    <StartupObject>VRChatBioUpdater.Program</StartupObject>
     <Deterministic>true</Deterministic>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Remove="scratch\**" />
-    <Compile Remove=".references\**" />
     <None Include="scratch\**" />
+    <Compile Remove=".references\**" />
     <None Include=".references\**" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Humanizer.Core" Version="3.0.10" />
     <PackageReference Include="JsonSubTypes" Version="2.0.1" />
     <PackageReference Include="Microsoft.Bcl.TimeProvider" Version="9.0.6" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
@@ -27,14 +28,13 @@
     <PackageReference Include="Polly" Version="8.6.1" />
     <PackageReference Include="RestSharp" Version="112.1.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <PackageReference Include="Scriban" Version="7.1.0" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.10" />
     <PackageReference Include="VRChat.API" Version="2.20.7" />
     <PackageReference Include="System.Management" Version="9.0.2" />
   </ItemGroup>
-
-  <!-- This is for Costura.Fody to find its weavers -->
   <ItemGroup>
-    <None Update="FodyWeavers.xml">
+    <None Update="VRChatBioUpdater.sbn">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

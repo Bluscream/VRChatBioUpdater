@@ -21,6 +21,25 @@ namespace VRChatBioUpdater
 
         // userId -> entry data
         private Dictionary<string, TagEntry> _userTags = new Dictionary<string, TagEntry>();
+        private List<string> _sources;
+
+        public TagManager(List<string> sources)
+        {
+            _sources = sources;
+        }
+
+        public async Task RefreshTags()
+        {
+            await LoadTagsAsync(_sources);
+        }
+
+        public int TotalTags => TagsLoadedCount;
+
+        public int GetTaggedUsers(List<string> friendIds)
+        {
+            if (friendIds == null) return 0;
+            return friendIds.Count(id => IsUserTagged(id));
+        }
 
         /// <summary>Number of unique tag strings across all users.</summary>
         public int TagsLoadedCount { get; private set; }

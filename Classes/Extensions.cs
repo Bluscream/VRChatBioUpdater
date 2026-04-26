@@ -9,6 +9,7 @@ using System.Net;
 using System.Reflection;
 using System.Runtime.Versioning;
 using System.Web;
+using Humanizer;
 
 namespace VRChatBioUpdater
 {
@@ -163,19 +164,34 @@ namespace VRChatBioUpdater
         }
         #endregion
         #region Time
-        internal static string ToText(this TimeSpan span)
+        internal static string ToHuman(this TimeSpan span)
         {
-            if (span.TotalSeconds < 0) return "0s";
-            if (span.TotalDays >= 1) return $"{(int)span.TotalDays}d {(int)span.Hours}h";
-            if (span.TotalHours >= 1) return $"{(int)span.TotalHours}h {(int)span.Minutes}m";
-            if (span.TotalMinutes >= 1) return $"{(int)span.TotalMinutes}m {(int)span.Seconds}s";
-            return $"{(int)span.TotalSeconds}s";
+            if (span.TotalSeconds < 0) return "now";
+            return span.Humanize();
         }
 
-        internal static string ToText(this long ms)
+        internal static string ToHuman(this long ms)
         {
-            if (ms <= 0) return "0s";
-            return TimeSpan.FromMilliseconds(ms).ToText();
+            if (ms <= 0) return "now";
+            return TimeSpan.FromMilliseconds(ms).ToHuman();
+        }
+
+        internal static string ToPrettyString(this TimeSpan span) => span.ToHuman();
+        internal static string ToPrettyString(this long ms) => ms.ToHuman();
+
+        internal static string GetHighestRank(this IEnumerable<string> tags)
+        {
+            if (tags == null) return "User";
+            
+            // Priority order: Admin -> Legendary (Veteran) -> Veteran (Trusted) -> Trusted (Known) -> Known (User) -> Basic (New User) -> Visitor
+            if (tags.Any(t => t.Equals("admin", StringComparison.OrdinalIgnoreCase))) return "Admin";
+            if (tags.Any(t => t.EndsWith("_trust_legend", StringComparison.OrdinalIgnoreCase))) return "Veteran User";
+            if (tags.Any(t => t.EndsWith("_trust_veteran", StringComparison.OrdinalIgnoreCase))) return "Trusted User";
+            if (tags.Any(t => t.EndsWith("_trust_trusted", StringComparison.OrdinalIgnoreCase))) return "Known User";
+            if (tags.Any(t => t.EndsWith("_trust_known", StringComparison.OrdinalIgnoreCase))) return "User";
+            if (tags.Any(t => t.EndsWith("_trust_basic", StringComparison.OrdinalIgnoreCase))) return "New User";
+            
+            return "Visitor";
         }
         #endregion
     }

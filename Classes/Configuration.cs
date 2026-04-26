@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
+using System.Linq;
 
 namespace VRChatBioUpdater
 {
@@ -10,6 +11,12 @@ namespace VRChatBioUpdater
         private FileInfo file;
         private string LoadedJson;
         internal AppConfig App = new AppConfig();
+        public class TemplateLine
+        {
+            public string Content { get; set; }
+            public string Compact { get; set; }
+        }
+
         public class AppConfig
         {
             public bool FetchDetails { get; set; } = true;
@@ -17,20 +24,12 @@ namespace VRChatBioUpdater
             public string Username { get; set; } = "";
             public string Password { get; set; } = "";
             public string TOTPSecret { get; set; } = "";
-            public Dictionary<string, string> Ids { get; set; } = new Dictionary<string, string>();
             public string UserAgent { get; set; } = "VRChatBioUpdater/1.0";
             public string _AuthCookie { get; set; } = "";
             public string _TwoFactorAuthCookie { get; set; } = "";
+            
+            [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
             public List<string> TagUrls { get; set; } = new List<string> { "https://github.com/Bluscream/FewTags/raw/refs/heads/main/usertags.json" };
-
-
-            public class CustomVariable
-            {
-                public string Content { get; set; } = "";
-                public string VisibleWhen { get; set; } = "";
-            }
-
-            public Dictionary<string, CustomVariable> CustomVariables { get; set; } = new Dictionary<string, CustomVariable>();
 
             // Bio Updater Settings
             public int UpdateInterval { get; set; } = 7200000; // 2 hours
@@ -38,25 +37,45 @@ namespace VRChatBioUpdater
             public string SteamId { get; set; } = "";
             public string SteamApiKey { get; set; } = "";
             public string SteamAppId { get; set; } = "438100";
-            public string BioTemplate { get; set; } = "Relationship: {group1} <3\nAuto Accept: {autojoin}\n{autoinviteprefix}{autoinvite}\n\nReal Rank: {rank}\nFriends: {friends} | Blocked: {blocked} | Muted: {muted}\nTime played: {playtime}\nDate joined: {date_joined}\nLast updated: {now} (every {interval})\nTagged: {tagged_users}/{tags_loaded}\n\nUser ID: {user_id}\nSteam ID: {steam_id}\nOculus ID: {oculus_id}\nPico ID: {pico_id}\nVive ID: {vive_id}";
+            
+            [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+            public List<TemplateLine> Bio { get; set; } = new List<TemplateLine>();
+
+            [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+            public List<TemplateLine> Status { get; set; } = new List<TemplateLine>();
+
+            [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+            public List<string> Links { get; set; } = new List<string>();
+            
             public string Separator { get; set; } = "\n-\n";
             public string VrcxDbPath { get; set; } = @"%APPDATA%\VRCX\VRCX.sqlite3";
 
             [JsonIgnore]
-            public string EffectiveBioTemplate
+            public List<TemplateLine> EffectiveBio
             {
                 get
                 {
+                    if (Bio != null && Bio.Count > 0) return Bio;
                     try
                     {
-                        var txtPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "VRChatBioUpdater.txt");
+                        var txtPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "VRChatBioUpdater.sbn");
                         if (File.Exists(txtPath))
                         {
-                            return File.ReadAllText(txtPath);
+                            var content = File.ReadAllText(txtPath);
+                            if (!string.IsNullOrWhiteSpace(content)) {
+                                return content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None)
+                                    .Select(line => new TemplateLine { Content = line })
+                                    .ToList();
+                            }
                         }
                     }
                     catch { }
-                    return BioTemplate;
+                    return new List<TemplateLine> { 
+                        new TemplateLine { Content = "Relationship: {{ groups.friend_group_0 | array.join \", \" }} <3" },
+                        new TemplateLine { Content = "Real Rank: {{ user_rank }}" },
+                        new TemplateLine { Content = "Friends: {{ stats.friends }}" },
+                        new TemplateLine { Content = "Time played: {{ playtime.steam }}" }
+                    };
                 }
             }
         }
@@ -100,7 +119,7 @@ namespace VRChatBioUpdater
                 Console.WriteLine("Press any key to exit...");
                 Console.ReadKey();
                 Environment.Exit(1);
-                return null; // Unreachable, but required by compiler
+                return null;
             }
         }
         internal bool SaveConfiguration() => SaveConfiguration(file, App, LoadedJson);
@@ -124,6 +143,5 @@ namespace VRChatBioUpdater
                 return false;
             }
         }
-
     }
 }
