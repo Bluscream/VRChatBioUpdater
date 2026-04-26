@@ -6,23 +6,30 @@ using System.Reflection;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using OtpNet;
+using System.Runtime.Versioning;
 using VRChat.API.Api;
 using VRChat.API.Client;
 using VRChat.API.Model;
 using VRChatBioUpdater;
 using Configuration = VRChatBioUpdater.Configuration;
 
+[assembly: SupportedOSPlatform("windows")]
+
 internal class Program
 {
     public static readonly Uri RepositoryUrl = new Uri("https://github.com/Bluscream/VRChatBioUpdater/");
-    private static readonly FileInfo ownExe = new FileInfo(Assembly.GetExecutingAssembly().Location);
+    private static readonly FileInfo ownExe = new FileInfo(Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, AppDomain.CurrentDomain.FriendlyName + ".exe"));
     private static readonly DirectoryInfo baseDir = ownExe.Directory ?? new DirectoryInfo(Environment.CurrentDirectory);
     private static readonly string exeName = Path.GetFileNameWithoutExtension(ownExe.Name);
-    internal static VrcApiClient client;
+    internal static IVRChat client;
     internal static Configuration cfg;
 
     static async Task Main(string[] _args)
     {
+        AppDomain.CurrentDomain.SetData("DataDirectory", AppContext.BaseDirectory);
+        bool runOnce = _args.Any(arg => arg.Equals("--once", StringComparison.OrdinalIgnoreCase) || 
+                                        arg.Equals("-once", StringComparison.OrdinalIgnoreCase) || 
+                                        arg.Equals("/once", StringComparison.OrdinalIgnoreCase));
         cfg = new Configuration(new FileInfo(Path.Combine(baseDir.FullName, $"{exeName}.json")));
         cfg.LoadConfiguration();
 
@@ -32,115 +39,57 @@ internal class Program
             CurrentUser currentUser = null;
             try
             {
-                client = new VrcApiClient();
-                client.Configuration = new VRChat.API.Client.Configuration()
-                {
-                    UserAgent = cfg.App.UserAgent,
-                    Username = cfg.App.Username,
-                    Password = cfg.App.Password
-                };
+            try
+            {
+                Console.WriteLine("Initializing VRChat API client...");
+                client = new VRChatClientBuilder()
+                    .WithCredentials(cfg.App.Username, cfg.App.Password)
+                    .WithApplication("VRChatBioUpdater", "1.0.0", "https://github.com/Bluscream/VRChatBioUpdater/")
+                    .Build();
 
-                Console.WriteLine("Logging in...");
-                
                 // Set up initial cookies from config
                 if (!string.IsNullOrWhiteSpace(cfg.App._AuthCookie))
                 {
                     Console.WriteLine("Using existing cookies from App Config");
-                    var domains = new[] { ".vrchat.com", "api.vrchat.cloud", "vrchat.com" };
+                    var domains = new[] { "api.vrchat.cloud", "vrchat.com" };
                     foreach (var domain in domains)
                     {
-                        ApiClient.CookieContainer.Add(new System.Net.Cookie("auth", cfg.App._AuthCookie, "/", domain));
+                        client.HttpClientHandler.CookieContainer.Add(new Uri($"https://{domain}"), new System.Net.Cookie("auth", cfg.App._AuthCookie));
                         if (!string.IsNullOrWhiteSpace(cfg.App._TwoFactorAuthCookie))
-                            ApiClient.CookieContainer.Add(new System.Net.Cookie("twoFactorAuth", cfg.App._TwoFactorAuthCookie, "/", domain));
+                            client.HttpClientHandler.CookieContainer.Add(new Uri($"https://{domain}"), new System.Net.Cookie("twoFactorAuth", cfg.App._TwoFactorAuthCookie));
                     }
                 }
 
-                // Initial check
-                var currentUserResp = await client.Auth.GetCurrentUserWithHttpInfoAsync();
-                
-                // If we already have user data, we are logged in!
-                if (currentUserResp.Data != null)
+                Console.WriteLine("Logging in...");
+                currentUser = await client.LoginWithExternalCodeAsync((providers) =>
                 {
-                    currentUser = currentUserResp.Data;
-                    Console.WriteLine($"Already logged in as {currentUser.DisplayName}");
-                    loginSuccessful = true;
-                }
-                else
-                {
-                    // Handle 2FA only if not logged in
-                    if (currentUserResp.RawContent.Contains("emailOtp"))
+                    if (!string.IsNullOrWhiteSpace(cfg.App.TOTPSecret) && providers.Contains("totp"))
+                    {
+                        var secretBytes = Base32Encoding.ToBytes(cfg.App.TOTPSecret);
+                        var code = new Totp(secretBytes).ComputeTotp(DateTime.UtcNow);
+                        Console.WriteLine($"Generated 2FA Code (TOTP): {code}");
+                        return new TwoFactorAuthCode(code);
+                    }
+
+                    if (providers.Contains("emailOtp"))
                     {
                         Console.WriteLine("Email 2FA required");
                         Console.Write("Enter 2FA Code: ");
                         var code = Console.ReadLine();
-                        if (string.IsNullOrWhiteSpace(code)) throw new Exception("2FA code cannot be empty.");
-                        await client.Auth.Verify2FAEmailCodeAsync(new TwoFactorEmailCode(code));
-                    }
-                    else if (currentUserResp.RawContent.Contains("requiresTwoFactorAuth") || currentUserResp.RawContent.Contains("twoFactorAuth"))
-                    {
-                        Console.WriteLine("Regular 2FA required");
-                        var code = string.Empty;
-                        if (string.IsNullOrWhiteSpace(cfg.App.TOTPSecret))
-                        {
-                            Console.Write("Enter 2FA Code: ");
-                            code = Console.ReadLine();
-                            if (string.IsNullOrWhiteSpace(code)) throw new Exception("2FA code cannot be empty.");
-                        }
-                        else
-                        {
-                            try
-                            {
-                                var secretBytes = Base32Encoding.ToBytes(cfg.App.TOTPSecret);
-                                code = new Totp(secretBytes).ComputeTotp(DateTime.UtcNow);
-                                Console.WriteLine($"Generated 2FA Code: {code}");
-                            }
-                            catch (Exception ex)
-                            {
-                                throw new Exception($"Error generating TOTP code: {ex.Message}");
-                            }
-                        }
-                        await client.Auth.Verify2FAAsync(new TwoFactorAuthCode(code));
-                        Console.WriteLine("2FA verified. Waiting for session to stabilize...");
-                        await Task.Delay(2000);
+                        return new TwoFactorEmailCode(code ?? string.Empty);
                     }
 
-                    // Verify auth token explicitly
-                    Console.WriteLine("Verifying Auth Token...");
-                    try {
-                        await client.Auth.VerifyAuthTokenAsync();
-                    } catch (ApiException ex) {
-                        Console.WriteLine($"Auth Token verification warning: {ex.Message} ({ex.ErrorCode})");
-                    }
+                    Console.WriteLine($"2FA required (Available providers: {string.Join(", ", providers)})");
+                    Console.Write("Enter 2FA Code: ");
+                    var manualCode = Console.ReadLine();
+                    return new TwoFactorAuthCode(manualCode ?? string.Empty);
+                });
 
-                    // Capture fresh cookies
+                if (currentUser != null)
+                {
+                    Console.WriteLine($"Logged in as {currentUser.DisplayName}");
+                    loginSuccessful = true;
                     CaptureCookies();
-
-                    // Final verification
-                    var finalUserResp = await client.Auth.GetCurrentUserWithHttpInfoAsync();
-                    currentUser = finalUserResp.Data;
-                    
-                    if (currentUser == null && finalUserResp.StatusCode == System.Net.HttpStatusCode.OK)
-                    {
-                        Console.WriteLine("Data was null but status OK. Attempting manual deserialization...");
-                        try {
-                            currentUser = JsonConvert.DeserializeObject<CurrentUser>(finalUserResp.RawContent, new JsonSerializerSettings { 
-                                MissingMemberHandling = MissingMemberHandling.Ignore,
-                                NullValueHandling = NullValueHandling.Ignore
-                            });
-                        } catch (Exception ex) {
-                            Console.WriteLine($"Manual deserialization failed: {ex.Message}");
-                        }
-                    }
-
-                    if (currentUser != null)
-                    {
-                        Console.WriteLine($"Logged in as {currentUser.DisplayName}");
-                        loginSuccessful = true;
-                    }
-                    else
-                    {
-                        throw new Exception($"Login verification failed (Status: {finalUserResp.StatusCode}). Content: {finalUserResp.RawContent}");
-                    }
                 }
             }
             catch (ApiException ex)
@@ -150,6 +99,17 @@ internal class Program
             catch (Exception ex)
             {
                 Console.WriteLine($"Login failed: {ex.Message}");
+            }
+            }
+            catch (ApiException ex)
+            {
+                Console.WriteLine($"Login failed (API): {ex.Message} (Code: {ex.ErrorCode})");
+                Environment.ExitCode = 1;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Login failed: {ex.Message}");
+                Environment.ExitCode = 1;
             }
 
             if (loginSuccessful)
@@ -169,7 +129,10 @@ internal class Program
                     catch (Exception ex)
                     {
                         Console.WriteLine($"Error in bio update loop: {ex.Message}");
+                        if (runOnce) Environment.ExitCode = 1;
                     }
+
+                    if (runOnce) break;
 
                     Console.WriteLine($"Waiting {cfg.App.UpdateInterval}ms for next update...");
                     await Task.Delay(cfg.App.UpdateInterval);
@@ -178,28 +141,29 @@ internal class Program
             else
             {
                 Console.WriteLine("Login failed. Cannot update bio.");
+                Environment.ExitCode = 1;
             }
         }
         finally
         {
             cfg?.SaveConfiguration();
-            Console.WriteLine("Exiting. Press any key to close...");
-            Console.ReadKey();
+            if (!runOnce)
+            {
+                Console.WriteLine("Exiting. Press any key to close...");
+                Console.ReadKey();
+            }
         }
     }
 
     private static void CaptureCookies()
     {
-        if (ApiClient.CookieContainer != null)
+        var cookies = client.GetCookies();
+        foreach (var cookie in cookies)
         {
-            var cookies = Extensions.GetAllCookies(ApiClient.CookieContainer).ToList();
-            foreach (var cookie in cookies)
-            {
-                if (cookie.Name == "auth") cfg.App._AuthCookie = cookie.Value;
-                if (cookie.Name == "twoFactorAuth") cfg.App._TwoFactorAuthCookie = cookie.Value;
-            }
-            Console.WriteLine($"Cookies captured: Auth={!string.IsNullOrEmpty(cfg.App._AuthCookie)}, 2FA={!string.IsNullOrEmpty(cfg.App._TwoFactorAuthCookie)}");
+            if (cookie.Name == "auth") cfg.App._AuthCookie = cookie.Value;
+            if (cookie.Name == "twoFactorAuth") cfg.App._TwoFactorAuthCookie = cookie.Value;
         }
+        Console.WriteLine($"Cookies captured: Auth={!string.IsNullOrEmpty(cfg.App._AuthCookie)}, 2FA={!string.IsNullOrEmpty(cfg.App._TwoFactorAuthCookie)}");
     }
 
     private static async Task UpdateBio(CurrentUser initialUser = null)
@@ -211,43 +175,48 @@ internal class Program
 
         if (currentUser == null)
         {
-            userResp = await client.Auth.GetCurrentUserWithHttpInfoAsync();
+            userResp = await client.Authentication.GetCurrentUserWithHttpInfoAsync();
             currentUser = userResp.Data;
 
             // Handle mid-loop 2FA requirements
             if (currentUser == null && userResp.RawContent.Contains("requiresTwoFactorAuth") && !string.IsNullOrWhiteSpace(cfg.App.TOTPSecret))
             {
-            Console.WriteLine("Session expired or requires 2FA. Attempting automatic re-verification...");
-            try
-            {
-                var secretBytes = Base32Encoding.ToBytes(cfg.App.TOTPSecret);
-                var code = new Totp(secretBytes).ComputeTotp(DateTime.UtcNow);
-                await client.Auth.Verify2FAAsync(new TwoFactorAuthCode(code));
-                Console.WriteLine("Re-verified 2FA. Retrying profile fetch...");
-                userResp = await client.Auth.GetCurrentUserWithHttpInfoAsync();
-                currentUser = userResp.Data;
-                CaptureCookies();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Auto 2FA re-verification failed: {ex.Message}");
+                Console.WriteLine("Session expired or requires 2FA. Attempting automatic re-verification...");
+                try
+                {
+                    var secretBytes = Base32Encoding.ToBytes(cfg.App.TOTPSecret);
+                    var code = new Totp(secretBytes).ComputeTotp(DateTime.UtcNow);
+                    await client.Authentication.Verify2FAAsync(new TwoFactorAuthCode(code));
+                    Console.WriteLine("Re-verified 2FA. Retrying profile fetch...");
+                    userResp = await client.Authentication.GetCurrentUserWithHttpInfoAsync();
+                    currentUser = userResp.Data;
+                    CaptureCookies();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Auto 2FA re-verification failed: {ex.Message}");
+                }
             }
         }
-    }
 
-    if (currentUser == null && userResp != null && userResp.StatusCode == System.Net.HttpStatusCode.OK)
+        if (currentUser == null && userResp != null && userResp.StatusCode == System.Net.HttpStatusCode.OK)
         {
-            try {
-                currentUser = JsonConvert.DeserializeObject<CurrentUser>(userResp.RawContent, new JsonSerializerSettings { 
+            try
+            {
+                currentUser = JsonConvert.DeserializeObject<CurrentUser>(userResp.RawContent, new JsonSerializerSettings
+                {
                     MissingMemberHandling = MissingMemberHandling.Ignore,
                     NullValueHandling = NullValueHandling.Ignore
                 });
-            } catch (Exception ex) {
+            }
+            catch (Exception ex)
+            {
                 Console.WriteLine($"Manual profile deserialization failed: {ex.Message}");
             }
         }
 
-        if (currentUser == null) {
+        if (currentUser == null)
+        {
             var status = userResp?.StatusCode.ToString() ?? "Unknown";
             var content = userResp?.RawContent ?? "No content";
             Console.WriteLine($"Failed to fetch current user profile (Status: {status}). Content: {content}");
@@ -262,11 +231,25 @@ internal class Program
         var mutes = moderations?.Count(m => m.Type == PlayerModerationType.Mute) ?? 0;
         Console.WriteLine($"Found {blocks} blocks and {mutes} mutes.");
 
+        Console.WriteLine($"Loading VRCX database from: {cfg.App.VrcxDbPath}");
+        var vrcxDb = new VrcxDatabase(cfg.App.VrcxDbPath);
+
         Console.WriteLine("Fetching favorites for group placeholders...");
         var favorites = await client.Favorites.GetFavoritesAsync(type: "friend");
-        var group1 = favorites?.Where(f => f.Tags != null && f.Tags.Contains("group_1")).Select(f => f.FavoriteId).ToList() ?? new List<string>();
-        var group2 = favorites?.Where(f => f.Tags != null && f.Tags.Contains("group_2")).Select(f => f.FavoriteId).ToList() ?? new List<string>();
-        var group3 = favorites?.Where(f => f.Tags != null && f.Tags.Contains("group_3")).Select(f => f.FavoriteId).ToList() ?? new List<string>();
+        
+        // Helper to get group members with fallback to VRCX DB
+        List<string> GetGroupMembers(string groupName, string vrcxGroupName)
+        {
+            var apiGroup = favorites?.Where(f => f.Tags != null && f.Tags.Contains(groupName)).Select(f => f.FavoriteId).ToList();
+            if (apiGroup != null && apiGroup.Count > 0) return apiGroup;
+            
+            // Fallback to VRCX local DB
+            return vrcxDb.GetFavoriteFriends(vrcxGroupName);
+        }
+
+        var group1 = GetGroupMembers("group_1", "friend:group_1");
+        var group2 = GetGroupMembers("group_2", "friend:group_2");
+        var group3 = GetGroupMembers("group_3", "friend:group_3");
 
         var group1Names = await GetDisplayNameList(group1);
         var group2Names = await GetDisplayNameList(group2);
@@ -277,52 +260,119 @@ internal class Program
             Console.WriteLine($"Fetching Steam playtime for {cfg.App.SteamId}...");
         }
         long? steamPlaytimeMinutes = await GetSteamPlaytime(cfg.App.SteamId, cfg.App.SteamApiKey, cfg.App.SteamAppId);
-        string playtimeText = TimeToText(steamPlaytimeMinutes * 60 * 1000 ?? 0);
+        string playtimeText = (steamPlaytimeMinutes * 60 * 1000 ?? 0).ToText();
         if (steamPlaytimeMinutes.HasValue) playtimeText += $" ({Math.Floor(steamPlaytimeMinutes.Value / 60.0):00}h)";
 
         var separator = cfg.App.Separator ?? "\n-\n";
         var bioParts = (currentUser.Bio ?? "").Split(new[] { separator }, StringSplitOptions.None);
         var oldBio = bioParts.Length > 1 ? bioParts[0] : "";
 
-        Console.WriteLine($"Loading VRCX database from: {cfg.App.VrcxDbPath}");
-        var vrcxDb = new VrcxDatabase(cfg.App.VrcxDbPath);
         var vrcxPlaytimeSeconds = vrcxDb.GetTotalPlaytimeSeconds(currentUser.Id);
 
         Console.WriteLine("\n--- Template & Variables ---");
         var template = cfg.App.EffectiveBioTemplate;
         Console.WriteLine($"Raw Template:\n{template}\n");
+        // Fetch tags from GitHub
+        Console.WriteLine("Fetching tags from configured URLs...");
+        var tagManager = new TagManager();
+        await tagManager.LoadTagsAsync(cfg.App.TagUrls);
+        Console.WriteLine($"Tags loaded: {tagManager.TagsLoadedCount} unique tags across {tagManager.TaggedUsersCount} users.");
+
+
+
+        var now = DateTime.Now;
+        // Calculate local tagged users (similar to VRCX bio-updater)
+        var taggedUsersCount = 0;
+        if (currentUser.Friends != null)
+        {
+            taggedUsersCount += currentUser.Friends.Count(f => tagManager.IsUserTagged(f));
+        }
+        if (moderations != null)
+        {
+            var targetIds = moderations.Select(m => m.TargetUserId).Distinct();
+            taggedUsersCount += targetIds.Count(id => tagManager.IsUserTagged(id));
+        }
 
         var vars = new Dictionary<string, string>
         {
-            { "{last_activity}", TimeToText((long)(DateTime.UtcNow - currentUser.LastActivity).TotalMilliseconds) },
+            { "{last_activity}", ((long)(DateTime.UtcNow - currentUser.LastActivity).TotalMilliseconds).ToText() },
             { "{playtime}", playtimeText },
-            { "{vrcx_playtime}", TimeToText(vrcxPlaytimeSeconds * 1000) },
+            { "{vrcx_playtime}", TimeSpan.FromMilliseconds(vrcxPlaytimeSeconds).ToText() },
             { "{date_joined}", currentUser.DateJoined.ToString("yyyy-MM-dd") },
+            { "{now}", now.ToString("yyyy-MM-dd HH:mm:ss") + " GMT+1" },
             { "{friends}", currentUser.Friends?.Count.ToString() ?? "0" },
             { "{blocked}", blocks.ToString() },
             { "{muted}", mutes.ToString() },
-            { "{now}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " GMT+1" },
             { "{group1}", string.Join(", ", group1Names) },
             { "{group2}", string.Join(", ", group2Names) },
             { "{group3}", string.Join(", ", group3Names) },
-            { "{tags_loaded}", vrcxDb.GetTotalTagsCount().ToString() },
-            { "{tagged_users}", vrcxDb.GetTaggedUsersCount().ToString() },
+
+            { "{tags_loaded}", tagManager.TagsLoadedCount.ToString() },
+            { "{tagged_users}", taggedUsersCount.ToString() },
             { "{memos}", vrcxDb.GetMemosCount().ToString() },
             { "{notes}", vrcxDb.GetNotesCount(currentUser.Id).ToString() },
             { "{user_id}", currentUser.Id },
-            { "{rank}", currentUser.Tags?.FirstOrDefault(t => t.StartsWith("system_trust_"))?.Replace("system_trust_", "") ?? "unknown" }
+            { "{steam_id}", currentUser.SteamId ?? "none" },
+            { "{oculus_id}", currentUser.OculusId ?? "none" },
+            { "{pico_id}", currentUser.PicoId ?? "none" },
+            { "{vive_id}", currentUser.ViveId ?? "none" },
+            { "{rank}", Utils.ComputeTrustLevel(currentUser.Tags) },
+            { "{interval}", ((long)cfg.App.UpdateInterval).ToText() }
         };
 
-        Console.WriteLine("Variables:");
+        var evalVars = new Dictionary<string, string>
+        {
+            { "group1.Count", group1Names.Count.ToString() },
+            { "group2.Count", group2Names.Count.ToString() },
+            { "group3.Count", group3Names.Count.ToString() },
+            { "friends.Count", (currentUser.Friends?.Count ?? 0).ToString() }
+        };
+
+        var dt = new System.Data.DataTable();
+        if (cfg.App.CustomVariables != null)
+        {
+            foreach (var cv in cfg.App.CustomVariables)
+            {
+                var condition = cv.Value.VisibleWhen;
+                if (!string.IsNullOrWhiteSpace(condition))
+                {
+                    foreach (var ev in evalVars) { condition = condition.Replace(ev.Key, ev.Value); }
+                    bool isVisible = false;
+                    try { isVisible = Convert.ToBoolean(dt.Compute(condition, "")); } catch {}
+                    vars[$"{{{cv.Key}}}"] = isVisible ? cv.Value.Content : "";
+                }
+                else
+                {
+                    vars[$"{{{cv.Key}}}"] = cv.Value.Content;
+                }
+            }
+        }
+
+        Console.WriteLine("Evaluation Variables:");
+        foreach (var v in evalVars) {
+            Console.WriteLine($"  {v.Key,-20} : {v.Value}");
+        }
+
+        Console.WriteLine("\nVariables:");
         foreach (var v in vars) {
             Console.WriteLine($"  {v.Key,-20} : {v.Value}");
         }
 
         Console.WriteLine("\nGenerating new bio content...");
         var newBioPart = template;
-        foreach (var v in vars) {
-            newBioPart = newBioPart.Replace(v.Key, v.Value);
-        }
+        
+        // Multi-pass replacement to support nested custom variables
+        string lastBio;
+        int passes = 0;
+        do
+        {
+            lastBio = newBioPart;
+            foreach (var v in vars)
+            {
+                newBioPart = newBioPart.Replace(v.Key, v.Value);
+            }
+            passes++;
+        } while (newBioPart != lastBio && passes < 3);
 
         var finalBio = (string.IsNullOrWhiteSpace(oldBio) ? "" : oldBio + separator) + newBioPart;
         if (finalBio.Length > 512) {
@@ -369,13 +419,5 @@ internal class Program
         return null;
     }
 
-    private static string TimeToText(long ms)
-    {
-        if (ms <= 0) return "0s";
-        var t = TimeSpan.FromMilliseconds(ms);
-        if (t.TotalDays >= 1) return $"{(int)t.TotalDays}d {(int)t.Hours}h";
-        if (t.TotalHours >= 1) return $"{(int)t.TotalHours}h {(int)t.Minutes}m";
-        if (t.TotalMinutes >= 1) return $"{(int)t.TotalMinutes}m {(int)t.Seconds}s";
-        return $"{(int)t.TotalSeconds}s";
-    }
+
 }

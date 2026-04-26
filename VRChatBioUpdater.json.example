@@ -1,0 +1,29 @@
+{
+  "Username": "your_username",
+  "Password": "your_password",
+  "TOTPSecret": "your_totp_secret",
+  "SteamId": "76561198022446661",
+  "SteamApiKey": "your_steam_api_key",
+  "SteamAppId": "438100",
+  "UpdateInterval": 7200000,
+  "InitialDelay": 5000,
+  "Separator": "\n-\n",
+  "VrcxDbPath": "%APPDATA%\\VRCX\\VRCX.sqlite3",
+  "BioTemplate": "{relationship}{autoinvite}\n\nReal Rank: {rank}\nFriends: {friends} | Blocked: {blocked} | Muted: {muted}\nTime played: {playtime} ({vrcx_playtime})\nDate joined: {date_joined}\nLast updated: {now} (every 2h)\n\nUser ID: {user_id}\nSteam ID: {steam_id}\nOculus ID: {oculus_id}",
+  "CustomVariables": {
+    "relationship": {
+      "Content": "Relationship: {group2} <3\n",
+      "VisibleWhen": "group2.Count > 0"
+    },
+    "autoinvite": {
+      "Content": "Auto Invite: {group3}\n",
+      "VisibleWhen": "group3.Count > 0"
+    }
+  },
+  "TagUrls": [
+    "https://github.com/Bluscream/FewTags/raw/refs/heads/main/usertags.json"
+  ],
+  "Ids": {
+    "group_1": "friend:group_1"
+  }
+}

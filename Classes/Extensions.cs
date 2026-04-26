@@ -7,10 +7,12 @@ using System.Linq;
 using System.Management;
 using System.Net;
 using System.Reflection;
+using System.Runtime.Versioning;
 using System.Web;
 
 namespace VRChatBioUpdater
 {
+    [SupportedOSPlatform("windows")]
     static class Extensions
     {
         #region Process
@@ -158,6 +160,22 @@ namespace VRChatBioUpdater
             if (file.Directory != null && !file.Directory.Exists) file.Directory.Create();
             if (!file.Exists) return string.Empty;
             return File.ReadAllText(file.FullName);
+        }
+        #endregion
+        #region Time
+        internal static string ToText(this TimeSpan span)
+        {
+            if (span.TotalSeconds < 0) return "0s";
+            if (span.TotalDays >= 1) return $"{(int)span.TotalDays}d {(int)span.Hours}h";
+            if (span.TotalHours >= 1) return $"{(int)span.TotalHours}h {(int)span.Minutes}m";
+            if (span.TotalMinutes >= 1) return $"{(int)span.TotalMinutes}m {(int)span.Seconds}s";
+            return $"{(int)span.TotalSeconds}s";
+        }
+
+        internal static string ToText(this long ms)
+        {
+            if (ms <= 0) return "0s";
+            return TimeSpan.FromMilliseconds(ms).ToText();
         }
         #endregion
     }
