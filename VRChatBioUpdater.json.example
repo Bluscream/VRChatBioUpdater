@@ -9,21 +9,25 @@
   "InitialDelay": 5000,
   "Separator": "\n-\n",
   "VrcxDbPath": "%APPDATA%\\VRCX\\VRCX.sqlite3",
-  "BioTemplate": "{relationship}{autoinvite}\n\nReal Rank: {rank}\nFriends: {friends} | Blocked: {blocked} | Muted: {muted}\nTime played: {playtime} ({vrcx_playtime})\nDate joined: {date_joined}\nLast updated: {now} (every 2h)\n\nUser ID: {user_id}\nSteam ID: {steam_id}\nOculus ID: {oculus_id}",
+  "BioTemplate": "{relationship}{autojoin}{autoinvite}\n\nReal Rank: {rank}\nFriends: {friends} | Blocked: {blocked} | Muted: {muted}\nTime played: {playtime} ({vrcx_playtime})\nDate joined: {date_joined}\nLast updated: {now} (every {interval})\nTagged: {tagged_users}/{tags_loaded}\n\nUser ID: {user_id}\nSteam ID: {steam_id}\nOculus ID: {oculus_id}",
   "CustomVariables": {
     "relationship": {
-      "Content": "Relationship: {group2} <3\n",
-      "VisibleWhen": "group2.Count > 0"
+      "Content": "Relationship: {group0} <3\n",
+      "VisibleWhen": "group0.Count > 0"
+    },
+    "autojoin": {
+      "Content": "Auto Join: {group1}\n",
+      "VisibleWhen": "group1.Count > 0"
     },
     "autoinvite": {
-      "Content": "Auto Invite: {group3}\n",
-      "VisibleWhen": "group3.Count > 0"
+      "Content": "Auto Invite: {group2}\n",
+      "VisibleWhen": "group2.Count > 0"
     }
   },
   "TagUrls": [
     "https://github.com/Bluscream/FewTags/raw/refs/heads/main/usertags.json"
   ],
   "Ids": {
-    "group_1": "friend:group_1"
+    "group_0": "friend:group_1"
   }
 }

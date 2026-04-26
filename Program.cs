@@ -247,14 +247,14 @@ internal class Program
             return vrcxDb.GetFavoriteFriends(vrcxGroupName);
         }
 
-        var group1 = GetGroupMembers("group_1", "friend:group_1");
-        var group2 = GetGroupMembers("group_2", "friend:group_2");
-        var group3 = GetGroupMembers("group_3", "friend:group_3");
+        var group0 = GetGroupMembers("group_0", "friend:group_1");
+        var group1 = GetGroupMembers("group_1", "friend:group_2");
+        var group2 = GetGroupMembers("group_2", "friend:group_3");
 
+        var group0Names = await GetDisplayNameList(group0);
         var group1Names = await GetDisplayNameList(group1);
         var group2Names = await GetDisplayNameList(group2);
-        var group3Names = await GetDisplayNameList(group3);
-        Console.WriteLine($"Group sizes: G1={group1Names.Count}, G2={group2Names.Count}, G3={group3Names.Count}");
+        Console.WriteLine($"Group sizes: G0={group0Names.Count}, G1={group1Names.Count}, G2={group2Names.Count}");
 
         if (!string.IsNullOrWhiteSpace(cfg.App.SteamId)) {
             Console.WriteLine($"Fetching Steam playtime for {cfg.App.SteamId}...");
@@ -303,9 +303,9 @@ internal class Program
             { "{friends}", currentUser.Friends?.Count.ToString() ?? "0" },
             { "{blocked}", blocks.ToString() },
             { "{muted}", mutes.ToString() },
+            { "{group0}", string.Join(", ", group0Names) },
             { "{group1}", string.Join(", ", group1Names) },
             { "{group2}", string.Join(", ", group2Names) },
-            { "{group3}", string.Join(", ", group3Names) },
 
             { "{tags_loaded}", tagManager.TagsLoadedCount.ToString() },
             { "{tagged_users}", taggedUsersCount.ToString() },
@@ -322,9 +322,9 @@ internal class Program
 
         var evalVars = new Dictionary<string, string>
         {
+            { "group0.Count", group0Names.Count.ToString() },
             { "group1.Count", group1Names.Count.ToString() },
             { "group2.Count", group2Names.Count.ToString() },
-            { "group3.Count", group3Names.Count.ToString() },
             { "friends.Count", (currentUser.Friends?.Count ?? 0).ToString() }
         };
 
