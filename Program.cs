@@ -455,7 +455,7 @@ internal class Program
             lastResult = result;
             result = regex.Replace(result, m => {
                 var key = m.Groups["key"].Value.Trim();
-                var sep = m.Groups["sep"].Success ? m.Groups["sep"].Value : null;
+                var arg = m.Groups["sep"].Success ? m.Groups["sep"].Value.Trim() : null;
                 
                 // Normalize key for groups
                 var groupKey = key;
@@ -463,11 +463,15 @@ internal class Program
                 if (groupKey.EndsWith(".names", StringComparison.OrdinalIgnoreCase)) groupKey = groupKey.Substring(0, groupKey.Length - 6);
 
                 if (groupNames.TryGetValue(groupKey, out var list)) {
-                    var separator = sep != null ? sep.Replace("\\n", "\n") : ", ";
-                    return string.Join(separator, list);
+                    if (arg != null) {
+                        if (arg.Equals("count", StringComparison.OrdinalIgnoreCase)) return list.Count.ToString();
+                        if (arg.Equals("comma", StringComparison.OrdinalIgnoreCase)) return string.Join(", ", list);
+                        return string.Join(arg.Replace("\\n", "\n"), list);
+                    }
+                    return string.Join(", ", list);
                 }
 
-                // If it's a count property
+                // If it's a count property in the key itself (for backward compatibility)
                 if (key.EndsWith(".Count", StringComparison.OrdinalIgnoreCase)) {
                     var stem = key.Substring(0, key.Length - 6);
                     if (stem.StartsWith("favorites.", StringComparison.OrdinalIgnoreCase)) stem = stem.Substring(10);
