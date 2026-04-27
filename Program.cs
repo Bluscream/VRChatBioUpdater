@@ -150,8 +150,7 @@ namespace VRChatBioUpdater
             scriptObject.Import(typeof(TemplateHelpers));
 
             var userObj = new ScriptObject();
-            userObj.Import(currentUser, renamer: member => member.Name);
-            userObj.Remove("DateJoined");
+            userObj.Import(currentUser, filter: member => member.Name != "DateJoined", renamer: member => member.Name);
             userObj.Add("DateJoined", currentUser.DateJoined.ToDateTime(TimeOnly.MinValue));
             scriptObject.Add("user", userObj);
             scriptObject.Add("friends", currentUser.Friends);
