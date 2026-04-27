@@ -16,6 +16,7 @@ namespace VRChatBioUpdater
         public IPlayermoderationApi Playermoderations => VrcClient.Moderations;
         public IFavoritesApi Favorites => VrcClient.Favorites;
         public IUsersApi Users => VrcClient.Users;
+        public IFriendsApi Friends => VrcClient.Friends;
 
         // Cookie extraction for persistence in Configuration
         public string AuthCookie => VrcClient.GetCookies().FirstOrDefault(c => c.Name == "auth")?.Value;
