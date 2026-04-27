@@ -163,13 +163,9 @@ namespace VRChatBioUpdater
             userObj.Add("DeveloperType", currentUser.DeveloperType);
             userObj.Add("LastLogin", currentUser.LastLogin);
             userObj.Add("LastPlatform", currentUser.LastPlatform);
-            userObj.Add("AllowServerWorlds", currentUser.AllowServerWorlds);
             userObj.Add("IsFriend", currentUser.IsFriend);
             userObj.Add("FriendKey", currentUser.FriendKey);
             userObj.Add("DateJoined", currentUser.DateJoined.ToDateTime(TimeOnly.MinValue));
-            userObj.Add("WorldId", currentUser.WorldId);
-            userObj.Add("InstanceId", currentUser.InstanceId);
-            userObj.Add("Location", currentUser.Location);
             userObj.Add("ActiveFriends", currentUser.ActiveFriends);
             userObj.Add("OfflineFriends", currentUser.OfflineFriends);
             userObj.Add("OnlineFriends", currentUser.OnlineFriends);
