@@ -30,7 +30,7 @@ namespace VRChatBioUpdater
             client = new VRChatApiClient(appConfig.Username, appConfig.Password, appConfig.TOTPSecret, appConfig.AuthCookie, appConfig.TwoFactorAuthCookie);
             tagManager = new TagManager(appConfig.TagUrls);
 
-            Console.WriteLine($"Initial delay: {appConfig.InitialDelay}ms");
+            Console.WriteLine($"Initial delay: {appConfig.InitialDelay.ToHuman()}");
             await Task.Delay(appConfig.InitialDelay);
 
             // Capture cookies for next time
@@ -43,46 +43,39 @@ namespace VRChatBioUpdater
             {
                 try
                 {
-                    await UpdateBio();
+                    var currentUser = await client.Auth.GetCurrentUserAsync();
+                    Console.WriteLine($"\n--- Starting Updates for {currentUser.DisplayName} ---");
+                    
+                    var context = await CreateTemplateContext(currentUser);
+
+                    await UpdateProfile(currentUser, context);
+                    
+                    Console.WriteLine("--- Done ---");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error during bio update: {ex.Message}");
+                    Console.WriteLine($"Error during updates: {ex.Message}\n{ex.StackTrace}");
                 }
 
                 if (once) break;
 
-                Console.WriteLine($"Waiting {TimeSpan.FromMilliseconds(appConfig.UpdateInterval).ToHuman()} for next update...");
+                Console.WriteLine($"Waiting {appConfig.UpdateInterval.ToHuman()} for next update...");
                 await Task.Delay(appConfig.UpdateInterval);
             } while (true);
         }
 
-        static async Task UpdateBio()
+        static async Task<TemplateContext> CreateTemplateContext(CurrentUser currentUser)
         {
-            Console.WriteLine("\n--- Starting Bio Update ---");
-            var currentUser = await client.Auth.GetCurrentUserAsync();
-            Console.WriteLine($"Logged in as: {currentUser.DisplayName}");
-
             var moderations = await client.Playermoderations.GetPlayerModerationsAsync();
             var blockedCount = moderations.Count(m => m.Type == PlayerModerationType.Block);
             var mutedCount = moderations.Count(m => m.Type == PlayerModerationType.Mute);
 
             var vrcxDb = new VrcxDatabase(config.App.VrcxDbPath);
-            var steamPlaytime = await GetSteamPlaytime(config.App.SteamId, config.App.SteamApiKey, config.App.SteamAppId);
+            var steamPlaytime = await Utils.GetSteamPlaytime(config.App.SteamId, config.App.SteamApiKey, config.App.SteamAppId);
 
-            var separator = config.App.Separator;
-            var oldBio = currentUser.Bio;
-
-            if (oldBio.Contains(separator))
-            {
-                oldBio = oldBio.Split(new[] { separator }, StringSplitOptions.None)[0];
-            }
-
-            var favorites = await client.Favorites.GetFavoritesAsync(n: 100);
+            var favorites = await client.Favorites.GetFavoritesAsync(n: 1000);
             
-            // Dynamic group variables
             var allGroupIds = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-
             if (favorites != null)
             {
                 foreach (var favorite in favorites)
@@ -100,17 +93,9 @@ namespace VRChatBioUpdater
                 }
             }
 
-            Console.WriteLine("Fetching favorite group metadata...");
+            Console.WriteLine("Fetching favorite groups...");
             var favoriteGroups = await client.Favorites.GetFavoriteGroupsAsync();
-            var tagToDisplayName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var groupData = new Dictionary<string, dynamic>(StringComparer.OrdinalIgnoreCase);
-
-            if (favoriteGroups != null) {
-                foreach (var fg in favoriteGroups) {
-                    tagToDisplayName[fg.Name] = fg.DisplayName;
-                    groupData[fg.Name] = new { id = fg.Id, name = fg.DisplayName, tag = fg.Name };
-                }
-            }
+            var tagToDisplayName = favoriteGroups.ToDictionary(f => f.Name, f => f.DisplayName, StringComparer.OrdinalIgnoreCase);
 
             var vrcxGroups = vrcxDb.GetAllFavoriteGroups();
             foreach (var vGroup in vrcxGroups)
@@ -134,13 +119,15 @@ namespace VRChatBioUpdater
                     groupNames[dName] = names;
                 }
                 
-                // Aliases
                 if (group.Key.StartsWith("group_", StringComparison.OrdinalIgnoreCase)) {
                     groupNames[group.Key.Replace("_", "")] = names;
                 }
                 else if (group.Key.StartsWith("friend:group_", StringComparison.OrdinalIgnoreCase)) {
                     var indexStr = group.Key.Substring("friend:group_".Length);
-                    if (int.TryParse(indexStr, out int idx)) groupNames[$"group{idx-1}"] = names;
+                    if (int.TryParse(indexStr, out int idx)) {
+                        groupNames[$"group{idx}"] = names;
+                        groupNames[$"friend_group_{idx}_names"] = names;
+                    }
                 }
             }
 
@@ -148,19 +135,14 @@ namespace VRChatBioUpdater
             var taggedUsers = tagManager.GetTaggedUsers(currentUser.Friends);
 
             var scriptObject = new ScriptObject();
-            
-            // Register Humanizer functions and other helpers
             scriptObject.Import(typeof(Humanizer.StringDehumanizeExtensions));
             scriptObject.Import(typeof(Humanizer.StringHumanizeExtensions));
             scriptObject.Import(typeof(Humanizer.TimeSpanHumanizeExtensions));
-            scriptObject.Add("date_parse", new Func<string, DateTime>(DateTime.Parse));
-            scriptObject.Add("humanize_ms", new Func<long, string>(ms => TimeSpan.FromMilliseconds(ms).ToHuman()));
-            scriptObject.Add("humanize_span", new Func<TimeSpan, string>(span => span.ToHuman()));
+            scriptObject.Import(typeof(TemplateHelpers));
 
-            // Expose the full raw user object as "user"
             scriptObject.Add("user", currentUser);
+            scriptObject.Add("user_rank", currentUser.Tags.GetHighestRank());
             
-            // Populate stats
             var stats = new {
                 friends = currentUser.Friends.Count,
                 blocked = blockedCount,
@@ -169,99 +151,115 @@ namespace VRChatBioUpdater
                 total_tags = tagManager.TotalTags
             };
 
-            // Populate playtime
             var playtime = new {
-                steam = steamPlaytime.HasValue ? TimeSpan.FromSeconds(steamPlaytime.Value).ToPrettyString() : "N/A",
-                vrcx = vrcxDb.GetTotalPlaytime(currentUser.Id).ToPrettyString()
+                steam = steamPlaytime,
+                vrcx = vrcxDb.GetTotalPlaytime(currentUser.Id)
             };
 
-            scriptObject.Add("user_rank", currentUser.Tags.GetHighestRank());
-            scriptObject.Add("user_date_joined", currentUser.DateJoined.ToString("yyyy-MM-dd"));
-            
             scriptObject.Add("stats", stats);
             scriptObject.Add("playtime", playtime);
             scriptObject.Add("config", config);
-            
-            // Root level variables
-            scriptObject.Add("rank", currentUser.Tags.GetHighestRank());
-            scriptObject.Add("friends", stats.friends);
-            scriptObject.Add("blocked", stats.blocked);
-            scriptObject.Add("muted", stats.muted);
-            scriptObject.Add("tagged_users", stats.tagged);
-            scriptObject.Add("tags_loaded", stats.total_tags);
-            scriptObject.Add("playtime", playtime.steam);
-            scriptObject.Add("steam_playtime", playtime.steam);
-            scriptObject.Add("vrcx_playtime", playtime.vrcx);
-            scriptObject.Add("date_joined", currentUser.DateJoined.ToString("yyyy-MM-dd"));
-            scriptObject.Add("user_id", currentUser.Id);
-            scriptObject.Add("steam_id", config.App.SteamId);
-            scriptObject.Add("oculus_id", currentUser.OculusId);
-            scriptObject.Add("pico_id", currentUser.PicoId);
-            scriptObject.Add("vive_id", currentUser.ViveId);
-            
-            scriptObject.Add("now", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " GMT" + DateTime.Now.ToString("zzz"));
-            scriptObject.Add("interval", TimeSpan.FromMilliseconds(config.App.UpdateInterval).ToPrettyString());
+            scriptObject.Add("now", DateTime.Now);
+            scriptObject.Add("interval", config.App.UpdateInterval);
 
-            var groupsObj = new ScriptObject();
-            foreach (var group in groupNames) {
-                var safeName = group.Key.Replace(":", "_").Replace("-", "_");
-                groupsObj.Add(safeName, group.Value);
-                if (!scriptObject.ContainsKey(safeName)) scriptObject.Add(safeName, group.Value);
-            }
-            scriptObject.Add("groups", groupsObj);
-
-            // Favorites helper: {{favorites["<ID>"].name}} or {{favorites["<NAME>"].names}}
             var favoritesHelper = new ScriptObject();
-            foreach (var group in groupData) {
-                var names = groupNames.TryGetValue(group.Key, out var n) ? n : new List<string>();
-                var dName = group.Value.name;
-                var item = new { id = group.Value.id, name = dName, names = names };
-                favoritesHelper.Add(group.Key, item);
-                if (!favoritesHelper.ContainsKey(dName)) favoritesHelper.Add(dName, item);
+            foreach (var fg in favoriteGroups.Where(f => f.Type == FavoriteType.Friend))
+            {
+                var names = groupNames.TryGetValue(fg.Name, out var n) ? n : new List<string>();
+                var item = new { id = fg.Id, name = fg.DisplayName, tag = fg.Name, names = names };
+                
+                var safeTag = fg.Name.Replace(":", "_").Replace("-", "_");
+                if (!favoritesHelper.ContainsKey(safeTag)) favoritesHelper.Add(safeTag, item);
+
+                // Add groupX aliases (e.g. friend-group-0 -> group0)
+                var parts = fg.Name.Split(new[] { '-', '_' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0 && int.TryParse(parts.Last(), out var idx))
+                {
+                    var alias = "group" + idx;
+                    if (!favoritesHelper.ContainsKey(alias)) favoritesHelper.Add(alias, item);
+                }
             }
             scriptObject.Add("favorites", favoritesHelper);
 
+            // Backwards compatibility for groups object
+            var groupsObj = new ScriptObject();
+            foreach (var group in groupNames) {
+                var safeName = group.Key.Replace(":", "_").Replace("-", "_");
+                if (!groupsObj.ContainsKey(safeName)) groupsObj.Add(safeName, group.Value);
+            }
+            scriptObject.Add("groups", groupsObj);
+
             var context = new TemplateContext();
             context.PushGlobal(scriptObject);
+            return context;
+        }
 
-            // 1. Render Bio
-            var finalBioContent = await RenderSmartTemplate(config.App.EffectiveBio, context, 512 - (string.IsNullOrWhiteSpace(oldBio) ? 0 : oldBio.Length + separator.Length));
-            var finalBio = (string.IsNullOrWhiteSpace(oldBio) ? "" : oldBio + separator) + finalBioContent;
+        static async Task UpdateProfile(CurrentUser currentUser, TemplateContext context)
+        {
+            var finalBio = await GenerateBio(currentUser, context);
+            var finalStatus = await GenerateStatus(currentUser, context);
+            var finalLinks = await GenerateLinks(currentUser, context);
 
-            // 2. Render Status
-            string finalStatus = null;
-            if (config.App.Status != null && config.App.Status.Count > 0) {
-                finalStatus = await RenderSmartTemplate(config.App.Status, context, 32);
+            var updateReq = new UpdateUserRequest();
+            if (finalBio != null) updateReq.Bio = finalBio;
+            if (finalStatus != null) updateReq.StatusDescription = finalStatus;
+            if (finalLinks != null && finalLinks.Count > 0) updateReq.BioLinks = finalLinks;
+
+            Console.WriteLine("Updating Profile...");
+            await client.Users.UpdateUserAsync(currentUser.Id, updateReq);
+            Console.WriteLine("Profile update complete.");
+        }
+
+        static async Task<string> GenerateBio(CurrentUser currentUser, TemplateContext context)
+        {
+            if (config.App.Bio == null || config.App.Bio.Count == 0) return null;
+            var prefix = currentUser.Bio ?? "";
+            if (prefix.Contains(config.App.BioSeparator)) {
+                prefix = prefix.Split(new[] { config.App.BioSeparator }, StringSplitOptions.None)[0];
             }
 
-            // 3. Render Links
-            List<string> finalLinks = null;
-            if (config.App.Links != null && config.App.Links.Count > 0) {
-                finalLinks = new List<string>();
-                foreach (var linkTpl in config.App.Links) {
+            var rendered = await RenderSmartTemplate(config.App.Bio, context, 512 - (string.IsNullOrEmpty(prefix) ? 0 : prefix.Length + config.App.BioSeparator.Length));
+            var finalBio = (string.IsNullOrEmpty(prefix) ? "" : prefix + config.App.BioSeparator) + rendered;
+            
+            Console.WriteLine($"Final Bio Preview:\n------------------\n{finalBio}\n------------------");
+            return finalBio;
+        }
+
+        static async Task<string> GenerateStatus(CurrentUser currentUser, TemplateContext context)
+        {
+            if (config.App.Status == null || config.App.Status.Count == 0) return null;
+            
+            var prefix = currentUser.StatusDescription ?? "";
+            if (prefix.Contains(config.App.StatusSeparator)) {
+                prefix = prefix.Split(new[] { config.App.StatusSeparator }, StringSplitOptions.None)[0];
+            }
+
+            var rendered = await RenderSmartTemplate(config.App.Status, context, 32 - (string.IsNullOrEmpty(prefix) ? 0 : prefix.Length + config.App.StatusSeparator.Length));
+            var finalStatus = (string.IsNullOrEmpty(prefix) ? "" : prefix + config.App.StatusSeparator) + rendered;
+
+            Console.WriteLine($"Final Status: {finalStatus}");
+            return finalStatus;
+        }
+
+        static async Task<List<string>> GenerateLinks(CurrentUser currentUser, TemplateContext context)
+        {
+            if (config.App.Links == null || config.App.Links.Count == 0) return null;
+
+            var finalLinks = new List<string>();
+            foreach (var linkTpl in config.App.Links) {
+                try {
                     var rendered = await Template.Parse(linkTpl).RenderAsync(context);
                     if (!string.IsNullOrWhiteSpace(rendered)) finalLinks.Add(rendered);
+                } catch (Exception ex) {
+                    Console.WriteLine($"[Warning] Failed to render link template '{linkTpl}': {ex.Message}");
                 }
             }
 
-            Console.WriteLine($"\nFinal Bio Preview:\n------------------\n{finalBio}\n------------------");
-            if (!string.IsNullOrEmpty(finalStatus)) Console.WriteLine($"Final Status: {finalStatus}");
-
-            var updateReq = new UpdateUserRequest(bio: finalBio);
-            if (finalStatus != null) updateReq.StatusDescription = finalStatus;
-            
-            // Update User
-            await client.Users.UpdateUserAsync(currentUser.Id, updateReq);
-
-            // Update Links if any
-            if (finalLinks != null && finalLinks.Count > 0) {
-                // Since UpdateUserRequest might not have Links directly in this version of the SDK, 
-                // we'll skip direct assignment if it's not available or use the correct property if found.
-                // Re-checking metadata or fallback to ignoring for now as it's a minor feature.
-                Console.WriteLine("Links feature is pending SDK verification.");
+            if (finalLinks.Count > 0) {
+                Console.WriteLine($"Final Links: {string.Join(", ", finalLinks)}");
+                return finalLinks;
             }
-
-            Console.WriteLine("Bio update complete.");
+            return null;
         }
 
         private static async Task<string> RenderSmartTemplate(List<Configuration.TemplateLine> lines, TemplateContext context, int maxLength)
@@ -313,24 +311,21 @@ namespace VRChatBioUpdater
             }
             return names;
         }
+    }
 
-        private static async Task<long?> GetSteamPlaytime(string steamId, string apiKey, string appId)
-        {
-            if (string.IsNullOrWhiteSpace(steamId) || string.IsNullOrWhiteSpace(apiKey)) return null;
-            try
-            {
-                using (var httpClient = new System.Net.Http.HttpClient())
-                {
-                    var url = $"https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key={apiKey}&steamid={steamId}&format=json&include_played_free_games=1";
-                    var response = await httpClient.GetStringAsync(url);
-                    dynamic data = JsonConvert.DeserializeObject(response);
-                    foreach (var game in data.response.games)
-                    {
-                        if (game.appid.ToString() == appId) return (long)game.playtime_forever * 60;
-                    }
-                }
-            } catch { }
-            return null;
+    public static class TemplateHelpers {
+        public static bool is_valid(object val) {
+            if (val == null) return false;
+            var s = val.ToString();
+            return !string.IsNullOrEmpty(s) && s != "null" && s != "0s";
+        }
+        public static DateTime date_parse(string s) => DateTime.Parse(s);
+        public static string humanize_span(TimeSpan span, string maxUnit = null) {
+            if (string.IsNullOrEmpty(maxUnit)) return span.ToHuman();
+            if (Enum.TryParse<Humanizer.TimeUnit>(maxUnit, true, out var unit)) {
+                return span.ToHuman(unit);
+            }
+            return span.ToHuman();
         }
     }
 }

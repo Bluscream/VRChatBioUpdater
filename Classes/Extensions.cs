@@ -164,9 +164,10 @@ namespace VRChatBioUpdater
         }
         #endregion
         #region Time
-        internal static string ToHuman(this TimeSpan span)
+        internal static string ToHuman(this TimeSpan span, TimeUnit? maxUnit = null)
         {
             if (span.TotalSeconds < 0) return "now";
+            if (maxUnit.HasValue) return span.Humanize(maxUnit: maxUnit.Value);
             return span.Humanize();
         }
 

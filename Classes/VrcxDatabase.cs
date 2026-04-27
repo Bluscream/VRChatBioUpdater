@@ -78,7 +78,7 @@ namespace VRChatBioUpdater
 
         public TimeSpan GetTotalPlaytime(string userId)
         {
-            return TimeSpan.FromSeconds(GetTotalPlaytimeSeconds(userId));
+            return TimeSpan.FromMilliseconds(GetTotalPlaytimeSeconds(userId));
         }
 
         public int GetMemosCount()

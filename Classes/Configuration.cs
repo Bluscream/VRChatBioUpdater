@@ -35,52 +35,24 @@ namespace VRChatBioUpdater
             public List<string> TagUrls { get; set; } = new List<string> { "https://github.com/Bluscream/FewTags/raw/refs/heads/main/usertags.json" };
 
             // Bio Updater Settings
-            public int UpdateInterval { get; set; } = 7200000; // 2 hours
-            public int InitialDelay { get; set; } = 5000; // 5 seconds
+            public TimeSpan UpdateInterval { get; set; } = TimeSpan.FromHours(2);
+            public TimeSpan InitialDelay { get; set; } = TimeSpan.FromSeconds(5);
             public string SteamId { get; set; } = "";
             public string SteamApiKey { get; set; } = "";
             public string SteamAppId { get; set; } = "438100";
             
             [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
             public List<TemplateLine> Bio { get; set; } = new List<TemplateLine>();
-
+            
             [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
             public List<TemplateLine> Status { get; set; } = new List<TemplateLine>();
 
             [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
             public List<string> Links { get; set; } = new List<string>();
             
-            public string Separator { get; set; } = "\n-\n";
+            public string BioSeparator { get; set; } = "\n-\n";
+            public string StatusSeparator { get; set; } = " | ";
             public string VrcxDbPath { get; set; } = @"%APPDATA%\VRCX\VRCX.sqlite3";
-
-            [JsonIgnore]
-            public List<TemplateLine> EffectiveBio
-            {
-                get
-                {
-                    if (Bio != null && Bio.Count > 0) return Bio;
-                    try
-                    {
-                        var txtPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "VRChatBioUpdater.sbn");
-                        if (File.Exists(txtPath))
-                        {
-                            var content = File.ReadAllText(txtPath);
-                            if (!string.IsNullOrWhiteSpace(content)) {
-                                return content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None)
-                                    .Select(line => new TemplateLine { Content = line })
-                                    .ToList();
-                            }
-                        }
-                    }
-                    catch { }
-                    return new List<TemplateLine> { 
-                        new TemplateLine { Content = "Relationship: {{ groups.friend_group_0 | array.join \", \" }} <3" },
-                        new TemplateLine { Content = "Real Rank: {{ user_rank }}" },
-                        new TemplateLine { Content = "Friends: {{ stats.friends }}" },
-                        new TemplateLine { Content = "Time played: {{ playtime.steam }}" }
-                    };
-                }
-            }
         }
 
         public Configuration(FileInfo file)
