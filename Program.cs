@@ -73,7 +73,7 @@ namespace VRChatBioUpdater
             var vrcxDb = new VrcxDatabase(config.App.VrcxDbPath);
             var steamPlaytime = await Utils.GetSteamPlaytime(config.App.SteamId, config.App.SteamApiKey, config.App.SteamAppId);
 
-            var favorites = await client.Favorites.GetFavoritesAsync(n: 1000);
+            var favorites = await client.Favorites.GetFavoritesAsync(n: 100);
             
             var allGroupIds = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             if (favorites != null)
