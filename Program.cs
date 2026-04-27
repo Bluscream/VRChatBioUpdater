@@ -150,8 +150,9 @@ namespace VRChatBioUpdater
             scriptObject.Import(typeof(TemplateHelpers));
 
             var userObj = new ScriptObject();
-            userObj.Import(currentUser);
+            userObj.Import(currentUser, renamer: member => member.Name);
             scriptObject.Add("user", userObj);
+            scriptObject.Add("friends", currentUser.Friends);
             scriptObject.Add("user_rank", currentUser.Tags.GetHighestRank());
             
             var stats = new {
