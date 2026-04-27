@@ -44,6 +44,7 @@ namespace VRChatBioUpdater
                 try
                 {
                     var currentUser = await client.Auth.GetCurrentUserAsync();
+                    if (currentUser.Friends == null) currentUser.Friends = new List<string>();
                     Console.WriteLine($"\n--- Starting Updates for {currentUser.DisplayName} ---");
                     
                     var context = await CreateTemplateContext(currentUser);
