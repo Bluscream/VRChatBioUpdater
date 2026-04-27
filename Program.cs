@@ -149,7 +149,9 @@ namespace VRChatBioUpdater
             scriptObject.Import(typeof(Humanizer.TimeSpanHumanizeExtensions));
             scriptObject.Import(typeof(TemplateHelpers));
 
-            scriptObject.Add("user", currentUser);
+            var userObj = new ScriptObject();
+            userObj.Import(currentUser);
+            scriptObject.Add("user", userObj);
             scriptObject.Add("user_rank", currentUser.Tags.GetHighestRank());
             
             var stats = new {
