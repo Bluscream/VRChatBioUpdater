@@ -22,6 +22,7 @@ namespace VRChatBioUpdater
         private static VRChatApiClient client;
         private static Configuration config;
         private static TagManager tagManager;
+        private static Dictionary<string, string> friendNameCache = new Dictionary<string, string>();
 
         static async Task Main(string[] args)
         {
@@ -40,6 +41,9 @@ namespace VRChatBioUpdater
             config.App.AuthCookie = client.AuthCookie;
             config.App.TwoFactorAuthCookie = client.TwoFactorAuthCookie;
             config.SaveConfiguration();
+
+            // Pre-fetch friend cache to reduce individual user API calls
+            await FetchFriendCache();
 
             do
             {
@@ -77,14 +81,24 @@ namespace VRChatBioUpdater
 
         static async Task<TemplateContext> CreateTemplateContext(CurrentUser currentUser)
         {
-            var moderations = await client.Playermoderations.GetPlayerModerationsAsync();
+            Console.WriteLine("Fetching moderations, playtime, favorites and tags in parallel...");
+            var moderationsTask = client.Playermoderations.GetPlayerModerationsAsync();
+            var steamPlaytimeTask = Utils.GetSteamPlaytime(config.App.SteamId, config.App.SteamApiKey, config.App.SteamAppId);
+            var favoritesTask = client.Favorites.GetFavoritesAsync(n: 100);
+            var favoriteGroupsTask = client.Favorites.GetFavoriteGroupsAsync();
+            var tagManagerTask = tagManager.RefreshTags();
+
+            await Task.WhenAll(moderationsTask, steamPlaytimeTask, favoritesTask, favoriteGroupsTask, tagManagerTask);
+
+            var moderations = await moderationsTask;
+            var steamPlaytime = await steamPlaytimeTask;
+            var favorites = await favoritesTask;
+            var favoriteGroups = await favoriteGroupsTask;
+
             var blockedCount = moderations.Count(m => m.Type == PlayerModerationType.Block);
             var mutedCount = moderations.Count(m => m.Type == PlayerModerationType.Mute);
 
             var vrcxDb = new VrcxDatabase(config.App.VrcxDbPath);
-            var steamPlaytime = await Utils.GetSteamPlaytime(config.App.SteamId, config.App.SteamApiKey, config.App.SteamAppId);
-
-            var favorites = await client.Favorites.GetFavoritesAsync(n: 100);
             
             var allGroupIds = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             if (favorites != null)
@@ -104,8 +118,6 @@ namespace VRChatBioUpdater
                 }
             }
 
-            Console.WriteLine("Fetching favorite groups...");
-            var favoriteGroups = await client.Favorites.GetFavoriteGroupsAsync();
             var tagToDisplayName = favoriteGroups.ToDictionary(f => f.Name, f => f.DisplayName, StringComparer.OrdinalIgnoreCase);
 
             var vrcxGroups = vrcxDb.GetAllFavoriteGroups();
@@ -121,20 +133,31 @@ namespace VRChatBioUpdater
                 }
             }
 
-            var groupNames = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var group in allGroupIds)
-            {
+            var totalUserIds = allGroupIds.Values.SelectMany(v => v).Distinct().Count();
+            Console.WriteLine($"Fetching display names for {totalUserIds} unique users across {allGroupIds.Count} groups in parallel...");
+            var groupTasks = allGroupIds.Select(async group => {
                 var names = await GetDisplayNameList(group.Value);
-                groupNames[group.Key] = names;
-                if (tagToDisplayName.TryGetValue(group.Key, out var dName)) {
+                return (Key: group.Key, Names: names);
+            }).ToList();
+            
+            var groupResults = await Task.WhenAll(groupTasks);
+            var groupNames = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            
+            foreach (var result in groupResults)
+            {
+                var key = result.Key;
+                var names = result.Names;
+                groupNames[key] = names;
+                
+                if (tagToDisplayName.TryGetValue(key, out var dName)) {
                     groupNames[dName] = names;
                 }
                 
-                if (group.Key.StartsWith("group_", StringComparison.OrdinalIgnoreCase)) {
-                    groupNames[group.Key.Replace("_", "")] = names;
+                if (key.StartsWith("group_", StringComparison.OrdinalIgnoreCase)) {
+                    groupNames[key.Replace("_", "")] = names;
                 }
-                else if (group.Key.StartsWith("friend:group_", StringComparison.OrdinalIgnoreCase)) {
-                    var indexStr = group.Key.Substring("friend:group_".Length);
+                else if (key.StartsWith("friend:group_", StringComparison.OrdinalIgnoreCase)) {
+                    var indexStr = key.Substring("friend:group_".Length);
                     if (int.TryParse(indexStr, out int idx)) {
                         groupNames[$"group{idx}"] = names;
                         groupNames[$"friend_group_{idx}_names"] = names;
@@ -142,7 +165,6 @@ namespace VRChatBioUpdater
                 }
             }
 
-            await tagManager.RefreshTags();
             var taggedUsers = tagManager.GetTaggedUsers(currentUser.Friends);
 
             var scriptObject = new ScriptObject();
@@ -451,17 +473,84 @@ namespace VRChatBioUpdater
             return current;
         }
 
+        private static async Task FetchFriendCache()
+        {
+            try
+            {
+                Console.WriteLine("Pre-fetching friend list for display name cache...");
+                int offset = 0;
+                const int n = 100;
+                while (true)
+                {
+                    var friends = await client.Friends.GetFriendsAsync(offset: offset, n: n);
+                    if (friends == null || friends.Count == 0) break;
+
+                    foreach (var friend in friends)
+                    {
+                        friendNameCache[friend.Id] = friend.DisplayName;
+                    }
+
+                    if (friends.Count < n) break;
+                    offset += n;
+                    // Small delay between chunks to be nice to the API
+                    await Task.Delay(200);
+                }
+                Console.WriteLine($"[Cache] Loaded {friendNameCache.Count} friends into memory.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Warning] Failed to pre-fetch friend cache: {ex.Message}");
+            }
+        }
+
         private static async Task<List<string>> GetDisplayNameList(List<string> userIds)
         {
-            var names = new List<string>();
-            foreach (var id in userIds.Take(5))
+            if (userIds == null || userIds.Count == 0) return new List<string>();
+            
+            var results = new List<string>();
+            var missingIds = new List<string>();
+
+            // First check the cache
+            foreach (var id in userIds)
             {
-                try {
-                    var user = await client.Users.GetUserAsync(id);
-                    if (user != null) names.Add(user.DisplayName);
-                } catch { }
+                if (friendNameCache.TryGetValue(id, out var name))
+                {
+                    results.Add(name);
+                }
+                else
+                {
+                    missingIds.Add(id);
+                }
             }
-            return names;
+
+            if (missingIds.Count > 0)
+            {
+                Console.WriteLine($"[Cache] {missingIds.Count} users missing from cache, fetching from API...");
+                // Limit concurrency and add small delays for missing users
+                var semaphore = new SemaphoreSlim(5);
+                var tasks = missingIds.Select(async id =>
+                {
+                    await semaphore.WaitAsync();
+                    try
+                    {
+                        await Task.Delay(100);
+                        var user = await client.Users.GetUserAsync(id);
+                        if (user != null)
+                        {
+                            friendNameCache[id] = user.DisplayName; // Cache for next time
+                            return user.DisplayName;
+                        }
+                        return null;
+                    }
+                    catch { return null; }
+                    finally { semaphore.Release(); }
+                }).ToList();
+
+                var apiResults = await Task.WhenAll(tasks);
+                results.AddRange(apiResults.Where(n => n != null));
+            }
+
+            return results.Distinct().ToList();
         }
     }
 
