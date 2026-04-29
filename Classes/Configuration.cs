@@ -11,11 +11,12 @@ namespace VRChatBioUpdater
     {
         private FileInfo file;
         private string LoadedJson;
-        public AppConfig App = new AppConfig();
+        public AppConfig App { get; set; } = new AppConfig();
         public class TemplateLine
         {
             public string Content { get; set; }
             public string Compact { get; set; }
+            public int Priority { get; set; } = 0;
         }
 
         public class AppConfig
@@ -46,6 +47,9 @@ namespace VRChatBioUpdater
             
             [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
             public List<TemplateLine> Status { get; set; } = new List<TemplateLine>();
+
+            [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
+            public List<TemplateLine> Pronouns { get; set; } = new List<TemplateLine>();
 
             [JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]
             public List<string> Links { get; set; } = new List<string>();

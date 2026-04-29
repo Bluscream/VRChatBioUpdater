@@ -11,6 +11,8 @@ using Newtonsoft.Json;
 using Scriban;
 using Scriban.Runtime;
 using Humanizer;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace VRChatBioUpdater
 {
@@ -148,10 +150,13 @@ namespace VRChatBioUpdater
             scriptObject.Import(typeof(Humanizer.StringHumanizeExtensions));
             scriptObject.Import(typeof(Humanizer.TimeSpanHumanizeExtensions));
             scriptObject.Import(typeof(TemplateHelpers));
+            scriptObject.Add("unity", GetUnityInfo());
 
             var userObj = new ScriptObject();
             userObj["Id"] = currentUser.Id;
+            #pragma warning disable CS0612
             userObj["Username"] = currentUser.Username;
+#pragma warning restore CS0612
             userObj["DisplayName"] = currentUser.DisplayName;
             userObj["UserIcon"] = currentUser.UserIcon;
             userObj["Bio"] = currentUser.Bio;
@@ -165,7 +170,8 @@ namespace VRChatBioUpdater
             userObj["LastPlatform"] = currentUser.LastPlatform;
             userObj["IsFriend"] = currentUser.IsFriend;
             userObj["FriendKey"] = currentUser.FriendKey;
-            userObj["DateJoined"] = currentUser.DateJoined.ToDateTime(TimeOnly.MinValue);
+            userObj["Pronouns"] = currentUser.Pronouns;
+            userObj["DateJoined"] = currentUser.DateJoined.ToDateTime(TimeOnly.MinValue).ToString("yyyy-MM-dd");
             userObj["ActiveFriends"] = currentUser.ActiveFriends;
             userObj["OfflineFriends"] = currentUser.OfflineFriends;
             userObj["OnlineFriends"] = currentUser.OnlineFriends;
@@ -182,16 +188,15 @@ namespace VRChatBioUpdater
                 total_tags = tagManager.TotalTags
             };
 
-            var playtime = new {
-                steam = steamPlaytime,
-                vrcx = vrcxDb.GetTotalPlaytime(currentUser.Id)
-            };
-
             scriptObject.Add("stats", stats);
-            scriptObject.Add("playtime", playtime);
+            scriptObject.Add("playtime", new {
+                steam = steamPlaytime?.Humanize(maxUnit: Humanizer.TimeUnit.Day) ?? "0 days",
+                vrcx = vrcxDb.GetTotalPlaytime(currentUser.Id).Humanize(maxUnit: Humanizer.TimeUnit.Day)
+            });
             scriptObject.Add("config", config);
-            scriptObject.Add("now", DateTime.Now);
-            scriptObject.Add("interval", config.App.UpdateInterval);
+            scriptObject.Add("now", DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
+            scriptObject.Add("now_time", DateTime.Now.ToString("HH:mm"));
+            scriptObject.Add("interval", config.App.UpdateInterval.Humanize());
 
             var favoritesHelper = new ScriptObject();
             foreach (var fg in favoriteGroups.Where(f => f.Type == FavoriteType.Friend))
@@ -220,7 +225,7 @@ namespace VRChatBioUpdater
             }
             scriptObject.Add("groups", groupsObj);
 
-            var context = new TemplateContext();
+            var context = new TemplateContext { MemberRenamer = m => m.Name };
             context.PushGlobal(scriptObject);
             return context;
         }
@@ -229,11 +234,13 @@ namespace VRChatBioUpdater
         {
             var finalBio = await GenerateBio(currentUser, context);
             var finalStatus = await GenerateStatus(currentUser, context);
+            var finalPronouns = await GeneratePronouns(currentUser, context);
             var finalLinks = await GenerateLinks(currentUser, context);
 
             var updateReq = new UpdateUserRequest();
             if (finalBio != null) updateReq.Bio = finalBio;
             if (finalStatus != null) updateReq.StatusDescription = finalStatus;
+            if (finalPronouns != null) updateReq.Pronouns = finalPronouns;
             if (finalLinks != null && finalLinks.Count > 0) updateReq.BioLinks = finalLinks;
 
             Console.WriteLine("Updating Profile...");
@@ -241,16 +248,117 @@ namespace VRChatBioUpdater
             Console.WriteLine("Profile update complete.");
         }
 
+        static ScriptObject GetUnityInfo()
+        {
+            var result = new ScriptObject();
+            result.Add("running", false);
+            try
+            {
+                var processes = Process.GetProcessesByName("Unity");
+                var process = processes.FirstOrDefault(p => !string.IsNullOrEmpty(p.MainWindowTitle));
+                
+                if (process == null) {
+                    if (processes.Length > 0) Console.WriteLine($"[Debug] Found {processes.Length} Unity processes, but none have a window title.");
+                    return result;
+                }
+
+                string version = "Unknown";
+                string project = "Unknown";
+                string scene = "Unknown";
+                TimeSpan processTime = TimeSpan.Zero;
+
+                try {
+                    version = process.MainModule?.FileVersionInfo.FileVersion ?? "Unknown";
+                    processTime = DateTime.Now - process.StartTime;
+                } catch { }
+
+                var title = process.MainWindowTitle;
+                Console.WriteLine($"[Debug] Unity Window Title: '{title}'");
+
+                if (!string.IsNullOrEmpty(title)) {
+                    if (title.Contains("Unity Hub")) {
+                        Console.WriteLine("[Debug] Unity process is Unity Hub, skipping.");
+                        return result;
+                    }
+                    
+                    // Pattern: "ProjectName - SceneName - Platform - Unity Version"
+                    var parts = title.Split(new[] { " - " }, StringSplitOptions.None);
+                    if (parts.Length >= 4) {
+                        project = parts[0];
+                        scene = parts[1];
+                        if (version == "Unknown") {
+                            var verMatch = Regex.Match(title, @"Unity ([\d\.\w]+)");
+                            if (verMatch.Success) version = verMatch.Groups[1].Value;
+                        }
+                    } else {
+                        Console.WriteLine($"[Debug] Unity title parts count {parts.Length} < 4, could not parse project/scene accurately.");
+                    }
+                }
+
+                result["running"] = true;
+                result["project"] = project;
+                result["scene"] = scene;
+                result["version"] = version;
+                result["process_time"] = string.Format("{0}{1}{2}", 
+                    processTime.Days > 0 ? $"{processTime.Days}d " : "",
+                    processTime.Hours > 0 ? $"{processTime.Hours}h " : "",
+                    $"{processTime.Minutes}m").Trim();
+                return result;
+            }
+            catch
+            {
+                return result;
+            }
+        }
+
+        static string GetManagedPrefix(string currentText, string separator, out bool found)
+        {
+            found = false;
+            if (string.IsNullOrEmpty(currentText)) return "";
+            
+            // Normalize everything to LF for consistent processing
+            currentText = currentText.Replace("\r\n", "\n");
+            var normSep = separator.Replace("\r\n", "\n");
+            var trimmedSep = normSep.Trim('\n', '\r', ' ');
+
+            // 1. Exact match (Highest priority, standard for " | " or "\n-\n")
+            int idx = currentText.IndexOf(normSep);
+            if (idx >= 0) {
+                found = true;
+                return currentText.Substring(0, idx).TrimEnd();
+            }
+
+            // 2. Line-based detection (For Bio with '-' or '---' lines, handles mangled newlines)
+            if (trimmedSep == "-" || trimmedSep == "---") {
+                var lines = currentText.Split('\n');
+                var sepLineIdx = Array.FindIndex(lines, l => l.Trim() == trimmedSep);
+                if (sepLineIdx >= 0) {
+                    found = true;
+                    return string.Join("\n", lines.Take(sepLineIdx)).TrimEnd();
+                }
+            }
+
+            // 3. Partial match fallback (Only for non-ambiguous separators, avoid single chars like '-')
+            if (!string.IsNullOrWhiteSpace(trimmedSep) && trimmedSep.Length > 1) {
+                idx = currentText.IndexOf(trimmedSep);
+                if (idx >= 0) {
+                    found = true;
+                    return currentText.Substring(0, idx).TrimEnd();
+                }
+            }
+
+            return ""; // Not found, return empty prefix to replace whole
+        }
+
         static async Task<string> GenerateBio(CurrentUser currentUser, TemplateContext context)
         {
             if (config.App.Bio == null || config.App.Bio.Count == 0) return null;
-            var prefix = currentUser.Bio ?? "";
-            if (prefix.Contains(config.App.BioSeparator)) {
-                prefix = prefix.Split(new[] { config.App.BioSeparator }, StringSplitOptions.None)[0];
-            }
+            
+            var separator = config.App.BioSeparator.Replace("\r\n", "\n");
+            var prefix = GetManagedPrefix(currentUser.Bio ?? "", separator, out var found);
 
-            var rendered = await RenderSmartTemplate(config.App.Bio, context, 512 - (string.IsNullOrEmpty(prefix) ? 0 : prefix.Length + config.App.BioSeparator.Length));
-            var finalBio = (string.IsNullOrEmpty(prefix) ? "" : prefix + config.App.BioSeparator) + rendered;
+            var rendered = await RenderSmartTemplate(config.App.Bio, context, 512 - (found && !string.IsNullOrEmpty(prefix) ? prefix.Length + separator.Length : 0));
+            var finalBio = (found && !string.IsNullOrEmpty(prefix) ? prefix + separator : "") + rendered;
             
             Console.WriteLine($"Final Bio Preview:\n------------------\n{finalBio}\n------------------");
             return finalBio;
@@ -260,13 +368,13 @@ namespace VRChatBioUpdater
         {
             if (config.App.Status == null || config.App.Status.Count == 0) return null;
             
-            var prefix = currentUser.StatusDescription ?? "";
-            if (prefix.Contains(config.App.StatusSeparator)) {
-                prefix = prefix.Split(new[] { config.App.StatusSeparator }, StringSplitOptions.None)[0];
-            }
+            var separator = config.App.StatusSeparator;
+            var prefix = GetManagedPrefix(currentUser.StatusDescription ?? "", separator, out var found);
 
-            var rendered = await RenderSmartTemplate(config.App.Status, context, 32 - (string.IsNullOrEmpty(prefix) ? 0 : prefix.Length + config.App.StatusSeparator.Length));
-            var finalStatus = (string.IsNullOrEmpty(prefix) ? "" : prefix + config.App.StatusSeparator) + rendered;
+            var rendered = await RenderSmartTemplate(config.App.Status, context, 32 - (found && !string.IsNullOrEmpty(prefix) ? prefix.Length + separator.Length : 0));
+            var finalStatus = (found && !string.IsNullOrEmpty(prefix) ? prefix + separator : "") + rendered;
+            
+            if (finalStatus.Length > 32) finalStatus = finalStatus.Substring(0, 29) + "...";
 
             Console.WriteLine($"Final Status: {finalStatus}");
             return finalStatus;
@@ -293,6 +401,14 @@ namespace VRChatBioUpdater
             return null;
         }
 
+        static async Task<string> GeneratePronouns(CurrentUser currentUser, TemplateContext context)
+        {
+            if (config.App.Pronouns == null || config.App.Pronouns.Count == 0) return null;
+            var rendered = await RenderSmartTemplate(config.App.Pronouns, context, 32);
+            Console.WriteLine($"Final Pronouns: {rendered}");
+            return rendered;
+        }
+
         private static async Task<string> RenderSmartTemplate(List<Configuration.TemplateLine> lines, TemplateContext context, int maxLength)
         {
             var results = new List<(string normal, string compact)>();
@@ -316,8 +432,13 @@ namespace VRChatBioUpdater
 
             if (current.Length <= maxLength) return current;
 
-            // Try compacting from last to first
-            for (int i = results.Count - 1; i >= 0; i--) {
+            // Try compacting starting from lowest priority
+            var indicesToCompact = Enumerable.Range(0, results.Count)
+                .OrderBy(i => lines[i].Priority)
+                .ThenByDescending(i => i) // Keep current last-to-first behavior for equal priority
+                .ToList();
+
+            foreach (var i in indicesToCompact) {
                 compactStatus[i] = true;
                 current = Build(compactStatus);
                 if (current.Length <= maxLength) return current;
@@ -344,6 +465,7 @@ namespace VRChatBioUpdater
         }
     }
 
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public static class TemplateHelpers {
         public static bool is_valid(object val) {
             if (val == null) return false;

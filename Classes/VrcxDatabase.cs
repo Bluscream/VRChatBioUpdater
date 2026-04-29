@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Data.Sqlite;
 using System.IO;
 
@@ -54,31 +55,66 @@ namespace VRChatBioUpdater
             return prefix;
         }
 
-        public long GetTotalPlaytimeSeconds(string userId)
+        public long GetTotalPlaytimeMs(string userId)
         {
             try
             {
                 var prefix = GetUserPrefix(userId);
+                var sessions = new List<(long Start, long End)>();
                 using (var conn = GetConnection())
                 {
                     if (conn == null) return 0;
                     var tableName = $"{prefix}_activity_sessions_v2";
-                    using (var cmd = new SqliteCommand($"SELECT SUM(end_at - start_at) FROM {tableName}", conn))
+                    using (var cmd = new SqliteCommand($"SELECT start_at, end_at FROM {tableName} WHERE user_id = @userId ORDER BY start_at ASC", conn))
                     {
-                        var result = cmd.ExecuteScalar();
-                        return result == DBNull.Value || result == null ? 0 : Convert.ToInt64(result);
+                        cmd.Parameters.AddWithValue("@userId", userId);
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                sessions.Add((reader.GetInt64(0), reader.GetInt64(1)));
+                            }
+                        }
                     }
                 }
+
+                if (sessions.Count == 0) return 0;
+
+                // VRCX Merge Gap: 5 minutes
+                long mergeGapMs = 5 * 60 * 1000;
+                // VRCX Max Session: 8 hours
+                long maxSessionMs = 8 * 60 * 60 * 1000;
+
+                var merged = new List<(long Start, long End)>();
+                var current = sessions[0];
+                
+                for (int i = 1; i < sessions.Count; i++)
+                {
+                    var next = sessions[i];
+                    if (next.Start <= current.End + mergeGapMs)
+                    {
+                        current.End = Math.Max(current.End, next.End);
+                    }
+                    else
+                    {
+                        merged.Add(current);
+                        current = next;
+                    }
+                }
+                merged.Add(current);
+
+                return merged.Sum(s => Math.Min(s.End - s.Start, maxSessionMs));
             }
-            catch (Exception ex) { 
-                Console.WriteLine($"[VRCX DB] Error in GetTotalPlaytimeSeconds: {ex.Message}");
-                return 0; 
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[VRCX DB] Error in GetTotalPlaytimeMs: {ex.Message}");
+                return 0;
             }
         }
 
         public TimeSpan GetTotalPlaytime(string userId)
         {
-            return TimeSpan.FromMilliseconds(GetTotalPlaytimeSeconds(userId));
+            return TimeSpan.FromMilliseconds(GetTotalPlaytimeMs(userId));
         }
 
         public int GetMemosCount()
